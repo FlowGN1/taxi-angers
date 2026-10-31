@@ -1,0 +1,950 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Taxi Angers</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Condensed:wght@600;700&family=Share+Tech+Mono&display=swap">
+<style>
+/* Layout : bandeau tableau de bord en haut, plan d'Angers à gauche (en haut sur téléphone), panneau de course à droite (en bas). */
+:root{
+  --bg:#eceff3; --surface:#ffffff; --surface2:#f4f6f8; --ink:#1b2530; --muted:#596777; --line:#d3dae2;
+  --land:#ebe6d7; --water:#b4cfe2; --road:#ffffff; --case:#b9c3cf; --fast:#f3e2a6;
+  --accent:#e2a200; --accent-ink:#1d1600; --ok:#15915a; --bad:#cc3a2b; --warn:#cf6f15;
+  --sign:#2557a8; --sign-ink:#ffffff;
+  --meter-bg:#131614; --maproad:#5a6b7d; --mapfast:#c98a00; --meter:#ff6b3d;
+  --f-display:"Barlow Condensed","Arial Narrow",sans-serif;
+  --f-body:"Atkinson Hyperlegible",system-ui,-apple-system,sans-serif;
+  --f-mono:"Share Tech Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f151c; --surface:#17202a; --surface2:#1c2733; --ink:#e5eaf0; --muted:#95a3b2; --line:#2a3644;
+  --land:#1a232d; --water:#22405a; --road:#3b4858; --case:#0c1117; --fast:#6b5a22;
+  --accent:#f3b623; --accent-ink:#1d1600; --ok:#3cc283; --bad:#f06a58; --warn:#f0954a;
+  --sign:#4d82d6; --sign-ink:#ffffff; --maproad:#5a6b7d; --mapfast:#c98a00; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0f151c; --surface:#17202a; --surface2:#1c2733; --ink:#e5eaf0; --muted:#95a3b2; --line:#2a3644;
+  --land:#1a232d; --water:#22405a; --road:#3b4858; --case:#0c1117; --fast:#6b5a22;
+  --accent:#f3b623; --accent-ink:#1d1600; --ok:#3cc283; --bad:#f06a58; --warn:#f0954a;
+  --sign:#4d82d6; --sign-ink:#ffffff; --maproad:#5a6b7d; --mapfast:#c98a00; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px}
+button{font:inherit;color:inherit}
+.app{display:flex;flex-direction:column;gap:12px;min-height:100%;max-width:1400px;margin:0 auto}
+
+/* Bandeau */
+.hud{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 14px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand b{font-family:var(--f-display);font-size:1.6rem;letter-spacing:.02em;line-height:1}
+.lum{font-family:var(--f-display);font-weight:700;font-size:.85rem;letter-spacing:.12em;padding:3px 9px;border-radius:5px;color:#fff;background:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,var(--ok) 30%,transparent)}
+.lum.busy{background:var(--bad);box-shadow:0 0 0 2px color-mix(in srgb,var(--bad) 30%,transparent)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:8px 14px;flex:1;min-width:0}
+.stat span,.gauge span{display:block;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.stat b{font-family:var(--f-mono);font-size:1.05rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gauge{grid-column:span 2;min-width:0}
+.gauge .row{display:flex;align-items:center;gap:8px}
+.bar{flex:1;height:9px;border-radius:5px;background:var(--surface2);border:1px solid var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok);transition:width .4s}
+.bar i.warn{background:var(--warn)} .bar i.bad{background:var(--bad)}
+.gauge b{font-family:var(--f-mono);font-size:.9rem;white-space:nowrap}
+
+/* Zone principale */
+.main{display:flex;flex-direction:column;gap:12px;flex:1}
+.mapwrap{position:relative;height:56vh;min-height:320px;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--land)}
+#map{width:100%;height:100%}
+.mapctl{position:absolute;left:10px;top:10px;z-index:500;display:flex;flex-direction:column;gap:6px}
+.mapctl button{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-weight:700;font-size:1.2rem;cursor:pointer}
+.mapctl button.wide{width:auto;padding:0 10px;font-size:.8rem}
+.mapnote{position:absolute;left:60px;top:14px;z-index:500;margin:0;font-size:.72rem;color:var(--muted);background:color-mix(in srgb,var(--land) 80%,transparent);padding:2px 6px;border-radius:6px}
+.toast{z-index:600;position:absolute;left:50%;top:12px;transform:translateX(-50%);max-width:calc(100% - 80px);background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--accent);border-radius:10px;padding:8px 12px;font-weight:700;font-size:.92rem;box-shadow:0 6px 20px rgb(0 0 0 / .18)}
+.toast.bad{border-left-color:var(--bad)} .toast.warn{border-left-color:var(--warn)} .toast.ok{border-left-color:var(--ok)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:14px;min-width:0}
+@media (min-width:920px){
+  .main{display:grid;grid-template-columns:minmax(0,1fr) 400px;align-items:stretch;min-height:600px}
+  .mapwrap{height:auto;min-height:600px}
+  .panel{overflow:auto;max-height:calc(100vh - 120px)}
+}
+
+/* Panneau */
+.kicker{font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:700}
+h1.title{font-family:var(--f-display);font-size:2.4rem;line-height:1;margin:0;text-wrap:balance}
+h2{font-family:var(--f-display);font-size:1.5rem;line-height:1.1;margin:0;text-wrap:balance}
+p{margin:0}
+.lede{color:var(--muted);max-width:60ch}
+.small{font-size:.82rem;color:var(--muted)}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+legend{font-weight:700;margin-bottom:6px}
+.choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.choice{position:relative}
+.choice input{position:absolute;opacity:0;inset:0}
+.choice label{display:block;height:100%;padding:10px 12px;border:2px solid var(--line);border-radius:10px;cursor:pointer;background:var(--surface2)}
+.choice label b{display:block;font-family:var(--f-display);font-size:1.15rem;letter-spacing:.02em}
+.choice label span{font-size:.8rem;color:var(--muted)}
+.choice input:checked + label{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
+.choice input:focus-visible + label{outline:3px solid var(--accent);outline-offset:2px}
+.check{display:flex;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:10px 16px;border-radius:11px;border:1px solid var(--line);background:var(--surface2);font-weight:700;cursor:pointer;text-align:center}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-size:1.05rem}
+.btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+.btns .btn{flex:1 1 140px}
+.trip{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px;align-items:baseline}
+.trip dt{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.trip dd{margin:0;font-weight:700}
+.pin{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.pin.from{background:var(--ok)} .pin.to{background:var(--bad)}
+.speech{background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.speech q{font-size:1.1rem;font-weight:700;quotes:"« " " »"}
+.speech .who{font-size:.85rem;color:var(--muted)}
+details summary{cursor:pointer;color:var(--muted);font-size:.88rem}
+details p{margin-top:6px;font-style:italic}
+.opts{display:flex;flex-direction:column;gap:8px}
+.opt{text-align:left;padding:12px 14px;border-radius:11px;border:2px solid var(--line);background:var(--surface);cursor:pointer;font-weight:700}
+.opt small{display:block;font-weight:400;color:var(--muted);margin-top:3px}
+.opt.good{border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,var(--surface))}
+.opt.wrong{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,var(--surface))}
+.opt:disabled{cursor:default}
+.feedback{border-radius:10px;padding:10px 12px;font-weight:700;background:color-mix(in srgb,var(--ok) 14%,var(--surface))}
+.feedback.no{background:color-mix(in srgb,var(--bad) 12%,var(--surface))}
+.meter{background:var(--meter-bg);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.meter .amt{font-family:var(--f-mono);font-size:2.3rem;color:var(--meter);letter-spacing:.04em;line-height:1;font-variant-numeric:tabular-nums}
+.meter .lbl{font-family:var(--f-mono);font-size:.78rem;color:#9aa39d;text-align:right;line-height:1.3}
+.legstats{display:flex;gap:14px;flex-wrap:wrap;font-size:.9rem}
+.legstats b{font-family:var(--f-mono)}
+.rdv{font-weight:700;padding:8px 12px;border-radius:10px;background:var(--surface2);border:1px solid var(--line)}
+.rdv.late{border-color:var(--bad);color:var(--bad)}
+.stars{font-size:1.7rem;letter-spacing:.08em;color:var(--accent);line-height:1}
+.stars .off{color:var(--line)}
+ul.notes{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:3px}
+table.bilan{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+table.bilan td{padding:7px 0;border-bottom:1px solid var(--line)}
+table.bilan td:last-child{text-align:right;font-family:var(--f-mono);font-weight:700}
+table.bilan tr.total td{border-bottom:0;font-size:1.1rem}
+.howto{background:color-mix(in srgb,var(--accent) 12%,var(--surface));border-radius:10px;padding:10px 12px;font-size:.93rem}
+.tag{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 7px;border-radius:999px;background:var(--surface2);border:1px solid var(--line);margin-right:4px}
+
+/* Carte Leaflet */
+#map{z-index:0}
+.leaflet-container{font-family:var(--f-body);background:var(--land)}
+.leaflet-tooltip.lbl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:2px 7px;font-weight:700;font-size:12px;box-shadow:0 1px 4px rgb(0 0 0 / .15)}
+.leaflet-tooltip.lbl.x{font-weight:400;color:var(--muted)}
+.leaflet-tooltip.lbl::before{display:none}
+.sg{display:inline-block;font-family:var(--f-display);font-size:10px;letter-spacing:.04em;padding:0 4px;border-radius:3px;border:1px solid var(--line);margin-left:2px;vertical-align:1px}
+.sg.h{background:var(--sign);color:var(--sign-ink);border-color:var(--sign)}
+.car{position:relative;width:40px;height:22px;margin-top:4px;background:var(--ink);border-radius:6px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgb(0 0 0 / .35)}
+.car b{color:var(--bg);font-family:var(--f-display);font-size:12px;letter-spacing:.05em}
+.car i{position:absolute;top:-6px;left:11px;width:18px;height:6px;border-radius:2px;background:var(--ok)}
+.car i.busy{background:var(--bad)}
+.incb{width:24px;height:24px;border-radius:50%;background:var(--bad);color:#fff;font:700 15px/24px var(--f-display);text-align:center;border:2px solid #fff}
+.incb.block{background:var(--ink);color:var(--bg)}
+path.pulse{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{stroke-opacity:.35;fill-opacity:.5}}
+@media (prefers-reduced-motion:reduce){path.pulse{animation:none}.bar i{transition:none}}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="hud">
+    <div class="brand"><span class="lum" id="lum">LIBRE</span><b>Taxi Angers</b></div>
+    <div class="stats">
+      <div class="stat"><span>Heure</span><b id="hTime">--:--</b></div>
+      <div class="stat"><span>Météo</span><b id="hMeteo">—</b></div>
+      <div class="stat"><span>Tarif</span><b id="hTarif">—</b></div>
+      <div class="stat"><span>Recettes</span><b id="hCash">0,00 €</b></div>
+      <div class="stat"><span>Courses</span><b id="hCourses">0</b></div>
+      <div class="gauge"><span id="gEnergyLbl">Carburant</span><div class="row"><div class="bar"><i id="gEnergy" style="width:0%"></i></div><b id="gEnergyTxt">—</b></div></div>
+      <div class="gauge"><span>Fatigue</span><div class="row"><div class="bar"><i id="gFat" style="width:0%"></i></div><b id="gFatTxt">—</b></div></div>
+    </div>
+  </header>
+  <main class="main">
+    <section class="mapwrap" aria-label="Plan d'Angers">
+      <div id="map"></div>
+      <div class="mapctl">
+        <button id="zcar" class="wide" aria-label="Centrer sur le taxi">Taxi</button>
+      </div>
+      <div class="toast" id="toast" role="status" hidden></div>
+      <p class="mapnote">Carrefours du jeu : positions approximatives</p>
+    </section>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- Géographie ---------- */
+const LON0 = -0.664, LAT1 = 47.537, K = 7246, COSL = 0.6763;
+const VBW = 1010, VBH = 862;
+const proj = (lat, lon) => [ (lon - LON0) * COSL * K, (LAT1 - lat) * K ];
+
+// t: p = lieu, x = carrefour, f = lointain. lp = position du nom (r, l, t, b)
+const N = {
+  beaucouze:  {ll:[47.4745,-0.6330], n:"Beaucouzé", t:'p', tags:['taxi','fuel'], lp:'b'},
+  a11:        {ll:[47.4815,-0.6400], n:"Échangeur A11", t:'x', lp:'t'},
+  nantes:     {ll:[47.4930,-0.6565], n:"Gare de Nantes", t:'f', lp:'t'},
+  aeroport:   {ll:[47.4650,-0.6565], n:"Aéroport Nantes-Atlantique", t:'f', lp:'b'},
+  atoll:      {ll:[47.4790,-0.6250], n:"L'Atoll", t:'p', tags:['fuel','charge'], lp:'t'},
+  belle:      {ll:[47.4792,-0.5995], n:"Belle-Beille", t:'p', lp:'t'},
+  grandmaine: {ll:[47.4705,-0.5930], n:"Grand Maine", t:'p', tags:['fuel','charge'], lp:'b'},
+  pattonx:    {ll:[47.4772,-0.5800], n:"Av. Patton", t:'x', lp:'b'},
+  lacmaine:   {ll:[47.4540,-0.5870], n:"Lac de Maine", t:'p', lp:'b'},
+  bassechaine:{ll:[47.4683,-0.5645], n:"Basse-Chaîne", t:'x', lp:'l'},
+  doutre:     {ll:[47.4757,-0.5650], n:"La Doutre", t:'p', lp:'l'},
+  verdun:     {ll:[47.4732,-0.5574], n:"Pont de Verdun", t:'x', lp:'r'},
+  chateau:    {ll:[47.4697,-0.5596], n:"Château", t:'p', lp:'l'},
+  ralliement: {ll:[47.4712,-0.5522], n:"Ralliement", t:'p', lp:'r'},
+  foch:       {ll:[47.4693,-0.5462], n:"Bd Foch", t:'p', lp:'r'},
+  gare:       {ll:[47.4645,-0.5565], n:"Gare Saint-Laud", t:'p', tags:['taxi','charge'], lp:'b'},
+  confluences:{ll:[47.4805,-0.5572], n:"Pont Confluences", t:'x', lp:'l'},
+  chu:        {ll:[47.4812,-0.5530], n:"CHU d'Angers", t:'p', tags:['h'], lp:'t'},
+  saintserge: {ll:[47.4790,-0.5440], n:"Saint-Serge", t:'p', lp:'r'},
+  monplaisir: {ll:[47.4935,-0.5360], n:"Monplaisir", t:'p', lp:'r'},
+  rnord:      {ll:[47.4990,-0.5560], n:"Rocade nord", t:'x', lp:'l'},
+  terra:      {ll:[47.5095,-0.5545], n:"Terra Botanica", t:'p', lp:'t'},
+  avrille:    {ll:[47.5065,-0.5885], n:"Avrillé", t:'p', lp:'t'},
+  ecouflant:  {ll:[47.5290,-0.5270], n:"Écouflant", t:'p', lp:'r'},
+  montaigne:  {ll:[47.4720,-0.5265], n:"Av. Montaigne", t:'x', lp:'t'},
+  stbarth:    {ll:[47.4690,-0.4950], n:"Saint-Barthélemy", t:'p', tags:['fuel'], lp:'t'},
+  a87x:       {ll:[47.4590,-0.5060], n:"Échangeur A87", t:'x', lp:'l'},
+  trelaze:    {ll:[47.4465,-0.4665], n:"Trélazé", t:'p', lp:'b'},
+  pole:       {ll:[47.4545,-0.4870], n:"Pôle santé Trélazé", t:'p', tags:['h'], lp:'r'},
+  justices:   {ll:[47.4590,-0.5345], n:"Les Justices", t:'p', lp:'r'},
+  roseraie:   {ll:[47.4500,-0.5470], n:"La Roseraie", t:'p', lp:'r'},
+  rocsud:     {ll:[47.4470,-0.5660], n:"Rocade sud", t:'x', lp:'b'},
+  ponts:      {ll:[47.4245,-0.5260], n:"Les Ponts-de-Cé", t:'p', tags:['fuel'], lp:'r'},
+};
+for (const k in N){ const [x,y] = proj(...N[k].ll); N[k].x = x; N[k].y = y; N[k].id = k; N[k].tags = N[k].tags || []; }
+
+// [a, b, nom, vitesse km/h, km fixe]
+const ROADS = [
+  ['beaucouze','atoll',"Route de Beaucouzé",50],
+  ['beaucouze','a11',"Accès A11",70],
+  ['atoll','a11',"Accès A11",70],
+  ['a11','nantes',"A11 vers Nantes",120,88],
+  ['a11','aeroport',"A11 vers l'aéroport",110,97],
+  ['beaucouze','grandmaine',"Route de Nantes",50],
+  ['atoll','belle',"Av. Patton",60],
+  ['belle','pattonx',"Av. Patton",50],
+  ['belle','grandmaine',"Rue de Belle-Beille",40],
+  ['grandmaine','pattonx',"Route de Nantes",50],
+  ['grandmaine','lacmaine',"Bd du Lac",50],
+  ['belle','avrille',"Liaison nord-ouest",60],
+  ['pattonx','doutre',"Av. René Gasnier",50],
+  ['lacmaine','bassechaine',"Route de la Baumette",40],
+  ['bassechaine','doutre',"Quai Monge",30],
+  ['bassechaine','chateau',"Pont de la Basse-Chaîne",40],
+  ['doutre','verdun',"Pont de Verdun",30],
+  ['doutre','confluences',"Pont Confluences",40],
+  ['doutre','avrille',"Av. Pierre Mendès-France",50],
+  ['confluences','chu',"Rue Larrey",30],
+  ['confluences','verdun',"Voie des Berges",50],
+  ['verdun','chateau',"Voie des Berges",50],
+  ['verdun','ralliement',"Centre-ville",30],
+  ['chateau','ralliement',"Centre-ville",30],
+  ['chateau','gare',"Bd du Roi René",40],
+  ['ralliement','foch',"Rue d'Alsace",30],
+  ['ralliement','chu',"Bd Ayrault",40],
+  ['gare','foch',"Bd Foch",40],
+  ['foch','saintserge',"Bd Carnot",40],
+  ['chu','saintserge',"Rue Larrey",30],
+  ['chu','rnord',"Liaison CHU nord",50],
+  ['saintserge','monplaisir',"Av. Jean Joxé",50],
+  ['foch','montaigne',"Av. Montaigne",50],
+  ['montaigne','stbarth',"Av. Montaigne",50],
+  ['montaigne','justices',"Rue Saint-Léonard",40],
+  ['montaigne','monplaisir',"Liaison est",50],
+  ['avrille','rnord',"Rocade nord",70],
+  ['rnord','terra',"Accès Terra Botanica",40],
+  ['rnord','monplaisir',"Rocade nord",70],
+  ['terra','ecouflant',"Route d'Écouflant",60],
+  ['monplaisir','ecouflant',"Route d'Écouflant",60],
+  ['monplaisir','stbarth',"Rocade est",70],
+  ['stbarth','a87x',"A87",90],
+  ['justices','a87x',"Rocade est",70],
+  ['a87x','trelaze',"A87",90],
+  ['a87x','pole',"Route de Trélazé",50],
+  ['pole','trelaze',"Av. de la République",50],
+  ['stbarth','pole',"Route de Saint-Barthélemy",50],
+  ['gare','justices',"Rue des Justices",40],
+  ['gare','roseraie',"Av. Victor Châtenay",50],
+  ['justices','roseraie',"Rue de la Roseraie",40],
+  ['roseraie','ponts',"Route des Ponts-de-Cé",60],
+  ['roseraie','rocsud',"Rocade sud",70],
+  ['rocsud','lacmaine',"Rocade sud",70],
+  ['chateau','rocsud',"Voie des Berges sud",60],
+  ['trelaze','ponts',"Route des Ardoisières",60],
+];
+function hav(a,b){ const R=6371, r=Math.PI/180, dLat=(b[0]-a[0])*r, dLon=(b[1]-a[1])*r;
+  const s=Math.sin(dLat/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
+const CENTER_RE = /Foch|Roi René|Carnot|Ayrault|Centre|Verdun|Berges|Montaigne|Alsace|Larrey/;
+const E = ROADS.map((r,i) => ({ i, a:r[0], b:r[1], name:r[2], v:r[3],
+  km: r[4] || +(hav(N[r[0]].ll, N[r[1]].ll)*1.3).toFixed(2),
+  fast: r[3] >= 60, far: !!r[4], center: CENTER_RE.test(r[2]) }));
+const ADJ = {}; for (const k in N) ADJ[k] = [];
+for (const e of E){ ADJ[e.a].push({e, to:e.b}); ADJ[e.b].push({e, to:e.a}); }
+
+const MAINE = [[47.537,-0.575],[47.52,-0.568],[47.505,-0.5655],[47.49,-0.5615],[47.481,-0.5585],[47.473,-0.5590],[47.468,-0.5615],[47.46,-0.566],[47.45,-0.5745],[47.44,-0.585],[47.428,-0.598],[47.418,-0.612]];
+const LOIRE = [[47.433,-0.45],[47.429,-0.49],[47.4245,-0.52],[47.423,-0.545],[47.421,-0.575],[47.419,-0.61],[47.417,-0.67]];
+
+/* ---------- Règles ---------- */
+const TARIF = { pec:4.40, jour:1.22, nuit:1.83, attenteMin:0.55, mini:8.00 };
+const VEH = {
+  diesel:{ label:"Diesel", unit:"L", cap:60, cons:6.2, price:1.72, kind:'fuel', gauge:"Gasoil", start:[0.10,0.16] },
+  hybride:{ label:"Hybride", unit:"L", cap:52, cons:5.0, price:1.82, kind:'fuel', gauge:"Essence", start:[0.10,0.16] },
+  elec:{ label:"Électrique", unit:"kWh", cap:77, cons:19, price:0.49, kind:'elec', gauge:"Batterie", start:[0.22,0.32] },
+};
+const MODES = {
+  journee:{ label:"Journée", desc:"7h30 – 19h · 6 courses", start:450, end:1140, max:6, hint:false, incP:0.25, fat:1 },
+  nuit:{ label:"Nuit", desc:"21h – 3h · tarif de nuit", start:1260, end:1620, max:6, hint:false, incP:0.25, fat:1.4 },
+  anglais:{ label:"Anglais", desc:"Tous les clients parlent anglais", start:540, end:1140, max:6, hint:false, incP:0.2, fat:1, en:true },
+  decouverte:{ label:"Découverte", desc:"Sans limite · chemin conseillé affiché", start:600, end:1e9, max:999, hint:true, incP:0.12, fat:0.7 },
+};
+const METEO = [
+  { n:"Soleil", f:1, w:50 }, { n:"Pluie", f:0.85, w:25 }, { n:"Brouillard", f:0.8, w:13 }, { n:"Neige", f:0.6, w:12 },
+];
+const INC_LABEL = { bouchon:"bouchon", accident:"accident, route fermée", travaux:"travaux, route barrée" };
+
+const RES = ['beaucouze','avrille','stbarth','trelaze','ponts','monplaisir','roseraie','ecouflant','justices','belle','lacmaine','doutre'];
+const TYPES = {
+  cpam:{ label:"Transport médical (CPAM)", from:RES, to:['chu','pole'], cpam:true },
+  gare:{ label:"Voyageur avec valises", from:['gare'], to:RES.concat(['grandmaine','atoll']) },
+  touriste:{ label:"Touriste", from:['gare','ralliement'], to:['chateau','terra','lacmaine','doutre'] },
+  agee:{ label:"Personne âgée", from:RES, to:['grandmaine','ralliement','chu','foch'] },
+  bebe:{ label:"Parent avec bébé", from:RES, to:['grandmaine','atoll','gare','chu'] },
+  fauteuil:{ label:"Client en fauteuil roulant", from:RES, to:['chu','pole','grandmaine'] },
+  affaires:{ label:"Client d'affaires", from:['gare','ralliement','atoll'], to:['atoll','gare','saintserge','belle'] },
+  long:{ label:"Course longue", from:['gare','ralliement','beaucouze'], to:['nantes','aeroport'] },
+  nuit:{ label:"Sortie de soirée", from:['ralliement','foch','doutre','saintserge'], to:RES },
+};
+const NAMES_FR = ["Mme Bertin","M. Lemoine","Mme Rousseau","M. Garnier","Mme Chevalier","M. Fournier","Mme Leroy","M. Bonnet","Mme Morel","M. Girard"];
+const NAMES_EN = ["Emily Carter","James Wilson","Sophie Brooks","Daniel Hughes","Olivia Taylor","Mr Patel","Grace Murphy","Tom Evans"];
+
+// Questions : [texte, juste ?, explication, traduction (anglais)]
+const QB = {
+  cpam:{
+    fr:{ line:"Bonjour ! J'ai rendez-vous à {rdv} à {dest}. On sera à l'heure ?", opts:[
+      ["Bonjour, oui, je prends le chemin le plus rapide. Vous avez bien votre bon de transport ?",1,"Bien vu : tu rassures le patient et tu vérifies la prescription de transport, indispensable pour facturer la CPAM."],
+      ["Ça dépend des bouchons, je ne promets rien.",0,"Trop sec. Avant un rendez-vous médical, le patient a besoin d'être rassuré."],
+      ["Il fallait réserver plus tôt.",0,"Reproche inutile : la course est réservée, à toi de t'organiser."]]},
+    en:{ line:"Hello! I have an appointment at {rdv} at {dest}. Will we be on time?", tr:"Bonjour ! J'ai rendez-vous à {rdv} à {dest}. On sera à l'heure ?", opts:[
+      ["Yes, I'll take the fastest way. Do you have your transport form?",1,"Bonne réponse : tu rassures et tu demandes le bon de transport.","Oui, je prends le chemin le plus rapide. Vous avez votre bon de transport ?"],
+      ["Maybe. Traffic is very bad today.",0,"Peu rassurant pour un patient.","Peut-être. Il y a beaucoup de circulation aujourd'hui."],
+      ["I don't know where it is.",0,"Une taxi doit connaître les hôpitaux du secteur.","Je ne sais pas où c'est."]]}},
+  gare:{
+    fr:{ line:"Bonjour, j'ai deux grosses valises. Vous pouvez m'aider ?", opts:[
+      ["Bien sûr, je les mets dans le coffre. Installez-vous.",1,"Parfait : aider aux bagages fait partie du service."],
+      ["Le coffre est ouvert, débrouillez-vous.",0,"Mauvaise image : le client s'en souviendra dans son avis."],
+      ["Les valises, c'est 10 € de plus.",0,"Attention : on ne facture que les suppléments prévus par le tarif officiel."]]},
+    en:{ line:"Hi! I've got two big suitcases. Could you help me?", tr:"Bonjour ! J'ai deux grosses valises. Vous pouvez m'aider ?", opts:[
+      ["Of course, I'll put them in the boot.",1,"Bonne réponse. « Boot » veut dire coffre (en anglais américain : « trunk »).","Bien sûr, je les mets dans le coffre."],
+      ["The boot is open, do it yourself.",0,"Pas très accueillant.","Le coffre est ouvert, faites-le vous-même."],
+      ["I am a taxi, not a porter.",0,"Le client va mettre une mauvaise note.","Je suis taxi, pas porteur."]]}},
+  touriste:{
+    fr:{ line:"Bonjour ! Qu'est-ce qu'il faut absolument voir à Angers ?", opts:[
+      ["Le château et sa tenture de l'Apocalypse, sans hésiter !",1,"Excellent : la tenture de l'Apocalypse est un chef-d'œuvre médiéval, la fierté d'Angers."],
+      ["Pas grand-chose, c'est une petite ville.",0,"Dommage : un taxi est aussi un ambassadeur de sa ville."],
+      ["Je ne sais pas, je ne suis pas guide.",0,"Le client attendait un conseil, même rapide."]]},
+    en:{ line:"Hello! What should I see in Angers?", tr:"Bonjour ! Qu'est-ce que je devrais voir à Angers ?", opts:[
+      ["The castle and the Apocalypse Tapestry. It's a must!",1,"Excellent : la tenture de l'Apocalypse est le trésor du château.","Le château et la tenture de l'Apocalypse. Incontournable !"],
+      ["Nothing, Angers is boring.",0,"Dommage : un taxi est aussi un ambassadeur de sa ville.","Rien, Angers c'est ennuyeux."],
+      ["Yes, please.",0,"Hors sujet : la question demandait un conseil de visite.","Oui, s'il vous plaît."]]}},
+  agee:{
+    fr:{ line:"Je marche difficilement. Vous pouvez m'aider à monter ?", opts:[
+      ["Bien sûr, prenez votre temps. Je vous tiens le bras et je range votre canne.",1,"Parfait : patience et aide, c'est ce qui fidélise les clients âgés."],
+      ["Dépêchez-vous un peu, le compteur tourne.",0,"À éviter : la personne va se sentir pressée et en danger."],
+      ["Je n'ai pas le droit de vous toucher.",0,"Faux : proposer son bras pour aider est tout à fait normal."]]},
+    en:{ line:"I walk with a stick. Could you help me get in?", tr:"Je marche avec une canne. Vous pouvez m'aider à monter ?", opts:[
+      ["Of course, take your time. Let me hold your arm.",1,"Bonne réponse : « take your time » = prenez votre temps.","Bien sûr, prenez votre temps. Je vous tiens le bras."],
+      ["Hurry up, please.",0,"À éviter avec une personne âgée.","Dépêchez-vous, s'il vous plaît."],
+      ["No, sorry.",0,"Refuser d'aider fait perdre le client.","Non, désolée."]]}},
+  bebe:{
+    fr:{ line:"Je suis avec mon bébé. Vous avez un siège auto ?", opts:[
+      ["Oui, j'ai un siège adapté. Je l'installe et je vérifie la fixation.",1,"Parfait : le siège auto reste le plus sûr pour un bébé."],
+      ["Gardez-le sur vos genoux, ça ira.",0,"Risqué : en cas de choc, les bras ne retiennent pas un bébé."],
+      ["Non, je ne prends pas les enfants.",0,"Tu perds un client. Avoir un siège à bord est un vrai plus."]]},
+    en:{ line:"I'm with my baby. Do you have a car seat?", tr:"Je suis avec mon bébé. Vous avez un siège auto ?", opts:[
+      ["Yes, I have a baby seat. I'll fit it for you.",1,"Bonne réponse : « baby seat » ou « car seat » = siège auto.","Oui, j'ai un siège bébé. Je l'installe pour vous."],
+      ["Just hold the baby on your lap.",0,"Risqué pour le bébé.","Gardez le bébé sur vos genoux."],
+      ["No children in my taxi.",0,"Tu perds un client.","Pas d'enfants dans mon taxi."]]}},
+  fauteuil:{
+    fr:{ line:"Je suis en fauteuil roulant. Il est pliable.", opts:[
+      ["Pas de souci, je vous aide à vous installer et je range le fauteuil dans le coffre.",1,"Parfait : tu proposes ton aide et tu t'occupes du fauteuil."],
+      ["Il vous faut un taxi spécial, je ne peux pas.",0,"Un fauteuil pliable rentre dans un grand coffre : la course est possible."],
+      ["Vous pouvez monter tout seul ?",0,"Mieux vaut proposer ton aide directement."]]},
+    en:{ line:"I use a wheelchair. It folds up.", tr:"Je suis en fauteuil roulant. Il se plie.", opts:[
+      ["No problem. I'll help you in and put the wheelchair in the boot.",1,"Bonne réponse : « wheelchair » = fauteuil roulant.","Pas de problème. Je vous aide à monter et je mets le fauteuil dans le coffre."],
+      ["You need another taxi.",0,"La course est possible avec un fauteuil pliable.","Il vous faut un autre taxi."],
+      ["Can you get in by yourself?",0,"Mieux vaut proposer ton aide directement.","Vous pouvez monter tout seul ?"]]}},
+  affaires:{
+    fr:{ line:"J'aurai besoin d'une note pour ma société, c'est possible ?", opts:[
+      ["Bien sûr, je vous fais une note avec le montant et le trajet.",1,"Parfait : la note est obligatoire à partir de 25 €, et sur demande en dessous."],
+      ["Je ne fais pas de notes.",0,"Faux : le client a le droit d'avoir une note."],
+      ["Seulement si vous payez en espèces.",0,"Faux : la note se fait quel que soit le moyen de paiement."]]},
+    en:{ line:"Can I have a receipt for my company, please?", tr:"Je peux avoir une note pour ma société, s'il vous plaît ?", opts:[
+      ["Of course, I'll print you a receipt.",1,"Bonne réponse : « receipt » = note, reçu.","Bien sûr, je vous imprime une note."],
+      ["No receipts, sorry.",0,"Le client a droit à une note.","Pas de notes, désolée."],
+      ["Only if you pay cash.",0,"La note se fait quel que soit le paiement.","Seulement si vous payez en espèces."]]}},
+  long:{
+    fr:{ line:"Bonjour, combien ça va coûter jusqu'à {dest} ?", opts:[
+      ["Environ {price}, selon la circulation. C'est le compteur qui fait foi.",1,"Parfait : une estimation honnête, et le compteur décide du prix final."],
+      ["Je ne sais pas, on verra bien.",0,"Le client veut une idée du prix avant une longue course."],
+      ["Le même prix qu'en ville.",0,"Faux : le prix dépend des kilomètres parcourus."]]},
+    en:{ line:"Hello, how much will it cost to {dest}?", tr:"Bonjour, combien ça va coûter jusqu'à {dest} ?", opts:[
+      ["About {price}, depending on traffic.",1,"Bonne réponse : « about » = environ.","Environ {price}, selon la circulation."],
+      ["I don't know, we'll see.",0,"Le client veut une idée du prix.","Je ne sais pas, on verra."],
+      ["Ten euros.",0,"Bien trop bas pour une course aussi longue.","Dix euros."]]}},
+  nuit:{
+    fr:{ line:"Salut ! On est trois, on peut tous monter ?", opts:[
+      ["Oui, montez. Attachez vos ceintures, s'il vous plaît.",1,"Parfait : la ceinture est obligatoire pour tous les passagers."],
+      ["Oui, pas besoin des ceintures, c'est à côté.",0,"Faux : la ceinture est obligatoire, même pour un petit trajet."],
+      ["Je ne prends pas les groupes.",0,"Trois personnes, c'est une course normale."]]},
+    en:{ line:"Hi! There are three of us. Can we all get in?", tr:"Salut ! On est trois. On peut tous monter ?", opts:[
+      ["Yes, get in. Please fasten your seatbelts.",1,"Bonne réponse : « fasten your seatbelts » = attachez vos ceintures.","Oui, montez. Attachez vos ceintures, s'il vous plaît."],
+      ["Yes, no need for seatbelts.",0,"Faux : la ceinture est obligatoire.","Oui, pas besoin de ceinture."],
+      ["No groups, sorry.",0,"Trois personnes, c'est une course normale.","Pas de groupes, désolée."]]}},
+  paiement:{
+    fr:{ line:"Je peux payer par carte bancaire ?", opts:[
+      ["Oui, bien sûr, le terminal est juste ici.",1,"Parfait : les taxis doivent accepter la carte bancaire."],
+      ["Non, espèces uniquement.",0,"Faux : un taxi doit pouvoir être payé par carte."],
+      ["Seulement au-dessus de 50 €.",0,"Faux : la carte s'accepte quel que soit le montant."]]},
+    en:{ line:"Can I pay by card?", tr:"Je peux payer par carte ?", opts:[
+      ["Yes, of course. The card machine is right here.",1,"Bonne réponse : « card machine » = terminal de paiement.","Oui, bien sûr. Le terminal est juste ici."],
+      ["No, cash only.",0,"Faux : un taxi doit accepter la carte.","Non, espèces uniquement."],
+      ["Only over fifty euros.",0,"Faux : quel que soit le montant.","Seulement au-dessus de 50 euros."]]}},
+};
+
+/* ---------- Outils ---------- */
+const pick = a => a[Math.floor(Math.random()*a.length)];
+const rand = (a,b) => a + Math.random()*(b-a);
+const pad = n => String(n).padStart(2,'0');
+function fmtClock(m){ const t = ((Math.round(m) % 1440) + 1440) % 1440; return pad(Math.floor(t/60)) + ':' + pad(t%60); }
+const eur = n => n.toFixed(2).replace('.', ',') + ' €';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+const store = { get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }, set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} } };
+
+/* ---------- État ---------- */
+const S = { phase:'start', pos:'beaucouze', clock:450, incidents:{}, meteo:METEO[0], V:VEH.diesel, M:MODES.journee };
+
+function isNight(){ const h = ((S.clock%1440)+1440)%1440; return h >= 1140 || h < 420; }
+function isRush(){ const h = S.clock%1440; return (h>=450 && h<=545) || (h>=1005 && h<=1110); }
+function freeMin(e){ return e.km / (e.v * S.meteo.f) * 60; }
+function edgeMin(e){
+  const inc = S.incidents[e.i];
+  if (inc && inc.block) return Infinity;
+  let m = freeMin(e);
+  if (isRush() && e.center) m *= 1.7;
+  if (inc) m *= inc.mult;
+  return m;
+}
+function route(from, to, weight = edgeMin){
+  const dist = {}, prev = {}, done = new Set();
+  for (const k in N) dist[k] = Infinity;
+  dist[from] = 0;
+  for (;;){
+    let u = null, best = Infinity;
+    for (const k in dist) if (!done.has(k) && dist[k] < best){ best = dist[k]; u = k; }
+    if (u === null || u === to) break;
+    done.add(u);
+    for (const {e, to:v} of ADJ[u]){
+      const w = weight(e); if (w === Infinity) continue;
+      if (dist[u] + w < dist[v]){ dist[v] = dist[u] + w; prev[v] = {u, e}; }
+    }
+  }
+  if (dist[to] === Infinity) return null;
+  const path = [to], edges = []; let c = to;
+  while (c !== from){ edges.unshift(prev[c].e); c = prev[c].u; path.unshift(c); }
+  return { time: dist[to], path, edges, km: edges.reduce((s,e)=>s+e.km, 0) };
+}
+function connected(){ for (const k in N) if (k!=='ralliement' && !route('ralliement', k)) return false; return true; }
+function energyPct(){ return S.energyU / S.V.cap; }
+function autonomyKm(){ return S.energyU / S.V.cons * 100; }
+
+/* ---------- Imprévus ---------- */
+function expireIncidents(){ for (const k in S.incidents) if (S.incidents[k].until <= S.clock) delete S.incidents[k]; }
+function spawnIncident(from, to){
+  let cand;
+  if (from){
+    const r = route(from, to); if (!r || !r.edges.length) return null;
+    const k = Math.min(r.edges.length-1, Math.random()<0.5 ? 0 : 1);
+    cand = r.edges[k];
+  } else {
+    cand = pick(E.filter(e => !e.far && !S.incidents[e.i]));
+  }
+  if (!cand || cand.far || S.incidents[cand.i]) return null;
+  const roll = Math.random(); let inc;
+  if (roll < 0.55) inc = { kind:'bouchon', mult:3, block:false, until:S.clock+rand(35,60) };
+  else if (roll < 0.8) inc = { kind:'accident', mult:1, block:true, until:S.clock+rand(30,50) };
+  else inc = { kind:'travaux', mult:1, block:true, until:S.clock+rand(120,240) };
+  S.incidents[cand.i] = inc;
+  if (inc.block && !connected()){ inc.block = false; inc.mult = 2.5; inc.kind = 'bouchon'; }
+  return { e:cand, inc };
+}
+
+/* ---------- Partie ---------- */
+function newGame(mode, veh, voice){
+  const M = MODES[mode], V = VEH[veh];
+  let w = Math.random()*100, met = METEO[0];
+  for (const m of METEO){ if (w < m.w){ met = m; break; } w -= m.w; }
+  Object.assign(S, { mode, M, V, voice, meteo:met, phase:'approach', pos:'beaucouze', clock:M.start,
+    energyU: V.cap*rand(...V.start), fatigue:0, km:0, cash:0, cpam:0, energyCost:0, depannage:0,
+    courses:0, stars:[], points:0, incidents:{}, client:null, leg:null, result:null, showHint:false, lowWarned:false, log:[] });
+  for (let i=0;i<2;i++) spawnIncident();
+  nextCourse();
+  centerOn(S.pos, true);
+}
+function genClient(){
+  const pool = S.mode==='nuit' ? ['nuit','nuit','nuit','gare','touriste','long','affaires']
+                               : ['cpam','cpam','cpam','gare','touriste','agee','bebe','fauteuil','affaires','long'];
+  let type = pick(pool);
+  if (type==='long' && Math.random()<0.5) type = pick(pool);
+  const T = TYPES[type];
+  const en = S.M.en || (type==='touriste' ? Math.random()<0.75 : Math.random()<0.2);
+  let fromSet = T.from, toSet = T.to;
+  if (type==='gare' && Math.random()<0.5){ fromSet = RES; toSet = ['gare']; }
+  const ranked = fromSet.map(c => ({c, t: c===S.pos ? 0 : (route(S.pos,c)?.time ?? 999)})).sort((a,b)=>a.t-b.t);
+  const near = ranked.filter(r => r.t <= 16);
+  const from = (near.length ? pick(near) : ranked[0]).c;
+  const to = pick(toSet.filter(x => x !== from));
+  const qKey = (type!=='cpam' && type!=='long' && Math.random()<0.25) ? 'paiement' : type;
+  const bank = QB[qKey][en ? 'en' : 'fr'];
+  const appr = from===S.pos ? 0 : route(S.pos, from).time;
+  const ride = route(from, to);
+  let rdv = null;
+  if (T.cpam){ rdv = Math.ceil((S.clock + appr + 3 + ride.time + rand(8,16)) / 5) * 5; }
+  const est = Math.round((TARIF.pec + ride.km*(isNight()?TARIF.nuit:TARIF.jour)) / 5) * 5;
+  const fill = s => s.replace('{rdv}', rdv!=null ? fmtClock(rdv).replace(':','h') : '').replace('{dest}', N[to].n).replace('{price}', est + ' €');
+  const opts = shuffle(bank.opts.map(o => ({ t:fill(o[0]), ok:!!o[1], fb:o[2], tr:o[3] ? fill(o[3]) : '' })));
+  return { type, label:T.label, cpam:!!T.cpam, en, from, to, rdv, name: pick(en ? NAMES_EN : NAMES_FR),
+    line: fill(bank.line), tr: bank.tr ? fill(bank.tr) : '', opts, answered:null };
+}
+function nextCourse(){
+  if (S.courses >= S.M.max || S.clock >= S.M.end) return endGame();
+  expireIncidents();
+  if (Math.random() < 0.6) spawnIncident();
+  S.client = genClient(); S.result = null; S.showHint = false;
+  if (S.client.from === S.pos){ S.leg = null; arriveAtPickup(); return; }
+  const r = route(S.pos, S.client.from);
+  S.leg = { kind:'approach', target:S.client.from, opt:r.time, min:0, km:0, path:[S.pos], hint:false };
+  S.phase = 'approach';
+  toast(`Nouvelle course : ${S.client.name} attend à ${N[S.client.from].n}.`, 'ok');
+  render();
+}
+function arriveAtPickup(){
+  S.phase = 'question'; S.leg = null;
+  render();
+  say(S.client.line, S.client.en);
+}
+function answer(i){
+  const c = S.client; if (c.answered) return;
+  c.answered = { i, ok: c.opts[i].ok };
+  render();
+}
+function startRide(){
+  const c = S.client, r = route(S.pos, c.to);
+  S.leg = { kind:'ride', target:c.to, opt:r.time, min:0, km:0, path:[S.pos], hint:false };
+  S.meter = TARIF.pec; S.phase = 'ride'; S.showHint = false;
+  if (Math.random() < S.M.incP){ const x = spawnIncident(S.pos, c.to); if (x) toast(`Info trafic : ${INC_LABEL[x.inc.kind]} sur ${x.e.name}.`, 'warn'); }
+  render();
+}
+function finishRide(){
+  const L = S.leg, c = S.client;
+  const ratio = L.min / Math.max(1, L.opt);
+  const price = Math.max(TARIF.mini, S.meter);
+  let s = 5; const notes = [];
+  if (!c.answered.ok){ s--; notes.push("Réponse au client à revoir"); }
+  if (ratio > 1.25){ s--; notes.push(`Trajet plus long que le chemin conseillé (${Math.round(L.min)} min au lieu de ${Math.round(L.opt)})`); }
+  if (ratio > 1.6) s--;
+  if (ratio <= 1.05) notes.push("Itinéraire optimal, bravo");
+  let late = null;
+  if (c.cpam){ late = Math.round(S.clock - c.rdv);
+    if (late > 0){ s -= late > 10 ? 2 : 1; notes.push(`Arrivée avec ${late} min de retard au rendez-vous`); }
+    else notes.push(`À l'heure, ${-late} min d'avance`); }
+  if (S.fatigue >= 90){ s--; notes.push("Trop fatiguée : pense aux pauses"); }
+  s = Math.max(1, Math.min(5, s));
+  const pts = s*20 + (ratio<=1.05 ? 20 : ratio<=1.25 ? 10 : 0) + (c.answered.ok ? 10 : 0) - (L.hint && !S.M.hint ? 10 : 0);
+  if (c.cpam) S.cpam += price; else S.cash += price;
+  S.courses++; S.stars.push(s); S.points += pts; S.fatigue = Math.min(100, S.fatigue + 4);
+  S.result = { ok:true, stars:s, price, pts, notes, cpam:c.cpam, min:L.min, opt:L.opt, km:L.km, client:c };
+  S.leg = null; S.phase = 'done';
+  toast(`Course terminée : ${eur(price)}`, 'ok');
+  say(c.en ? "Thank you, goodbye!" : "Merci, au revoir !", c.en);
+}
+function panne(e){
+  const aboard = S.phase === 'ride' || S.phase === 'approach';
+  S.clock += 45; S.depannage += 90; S.energyU = S.V.cap * 0.15; S.fatigue = Math.min(100, S.fatigue + 5);
+  toast(`Panne ${S.V.kind==='elec' ? 'de batterie' : 'sèche'} sur ${e.name} ! Dépannage : 45 min et 90 €.`, 'bad');
+  if (aboard && S.client){
+    S.courses++; S.stars.push(1);
+    S.result = { ok:false, stars:1, price:0, pts:0, notes:[S.phase==='ride' ? "Course perdue : le client a dû appeler un autre taxi" : "Le client a annulé la course", "Surveille la jauge et fais le plein avant 20 %"], client:S.client };
+    S.leg = null; S.phase = 'done';
+  }
+  render();
+}
+function endGame(){
+  S.phase = 'end'; S.leg = null;
+  const best = +(store.get('taxiAngers.best') || 0);
+  S.best = Math.max(best, S.points); S.newBest = S.points > best;
+  store.set('taxiAngers.best', String(S.best));
+  render();
+}
+
+/* ---------- Déplacement ---------- */
+function canDrive(){ return ['approach','ride','done'].includes(S.phase); }
+function tryMove(to){
+  if (S.anim || !canDrive()) return;
+  if (to === S.pos) return;
+  const link = ADJ[S.pos].find(a => a.to === to);
+  if (!link){ toast("Choisis un point jaune : un carrefour relié directement au taxi."); return; }
+  const e = link.e, t = edgeMin(e);
+  if (t === Infinity){ toast(`${e.name} : ${INC_LABEL[S.incidents[e.i].kind]}. Trouve un autre chemin.`, 'bad'); return; }
+  const need = e.km * S.V.cons / 100;
+  if (S.energyU < need) return panne(e);
+  const ms = reduced ? 0 : Math.max(320, Math.min(e.far ? 1800 : 1300, t*90));
+  animateCar(S.pos, to, ms, () => afterMove(e, to, t, need));
+}
+function afterMove(e, to, t, need){
+  S.clock += t; S.km += e.km; S.energyU = Math.max(0, S.energyU - need);
+  S.fatigue = Math.min(100, S.fatigue + t * 0.11 * S.M.fat);
+  if (S.phase === 'ride'){
+    S.meter += e.km * (isNight() ? TARIF.nuit : TARIF.jour);
+    S.meter += Math.max(0, t - freeMin(e)) * TARIF.attenteMin;
+  }
+  if (S.leg){ S.leg.min += t; S.leg.km += e.km; S.leg.path.push(to); }
+  S.pos = to;
+  expireIncidents();
+  if (energyPct() < 0.15 && !S.lowWarned){ S.lowWarned = true; toast(`Réserve ! Il te reste environ ${Math.round(autonomyKm())} km d'autonomie.`, 'warn'); }
+  if (energyPct() >= 0.15) S.lowWarned = false;
+  if (S.leg && S.pos === S.leg.target){
+    if (S.phase === 'ride') finishRide(); else { followCar(); arriveAtPickup(); return; }
+  } else if (S.leg && Math.random() < S.M.incP * (S.phase === 'ride' ? 1 : 0.5)){
+    const x = spawnIncident(S.pos, S.leg.target);
+    if (x) toast(`Info trafic : ${INC_LABEL[x.inc.kind]} sur ${x.e.name}.`, 'warn');
+  }
+  if (S.fatigue >= 100 && S.phase !== 'ride'){ S.clock += 30; S.fatigue = 60; toast("Épuisée : pause forcée de 30 min.", 'bad'); }
+  followCar();
+  render();
+}
+
+/* ---------- Actions station ---------- */
+function stationActions(){
+  if (!['approach','done'].includes(S.phase)) return '';
+  const n = N[S.pos], out = [];
+  const pct = energyPct();
+  if (S.V.kind === 'fuel' && n.tags.includes('fuel') && pct < 0.95){
+    const l = S.V.cap - S.energyU;
+    out.push(`<button class="btn" data-act="fuel">Faire le plein · ${eur(l*S.V.price)} · 7 min</button>`);
+  }
+  if (S.V.kind === 'elec' && n.tags.includes('charge') && pct < 0.9){
+    const add = Math.min(S.V.cap*0.9 - S.energyU, 40);
+    out.push(`<button class="btn" data-act="charge">Recharger 30 min · ${eur(add*S.V.price)}</button>`);
+  }
+  if (S.fatigue > 10) out.push(`<button class="btn" data-act="pause">Pause 20 min</button>`);
+  if (!out.length) return '';
+  const warn = S.phase === 'approach' ? `<p class="small">Attention : ton client attend pendant ce temps.</p>` : '';
+  return `<div class="btns">${out.join('')}</div>${warn}`;
+}
+function doFuel(){
+  const l = S.V.cap - S.energyU, cost = l*S.V.price;
+  S.energyU = S.V.cap; S.energyCost += cost; S.clock += 7;
+  toast(`Plein fait : ${l.toFixed(1).replace('.',',')} L pour ${eur(cost)}.`, 'ok'); afterAction();
+}
+function doCharge(){
+  const add = Math.min(S.V.cap*0.9 - S.energyU, 40), cost = add*S.V.price;
+  S.energyU += add; S.energyCost += cost; S.clock += 30; S.fatigue = Math.max(0, S.fatigue - 12);
+  toast(`Recharge : +${Math.round(add)} kWh pour ${eur(cost)}.`, 'ok'); afterAction();
+}
+function doPause(){ S.clock += 20; S.fatigue = Math.max(0, S.fatigue - 30); toast("Pause : fatigue en baisse.", 'ok'); afterAction(); }
+function afterAction(){
+  expireIncidents();
+  if (S.leg) S.leg.min += 0; // le temps compte dans l'horloge
+  render();
+}
+
+/* ---------- Voix ---------- */
+function say(text, en){
+  if (!S.voice) return;
+  try { const u = new SpeechSynthesisUtterance(text); u.lang = en ? 'en-GB' : 'fr-FR'; u.rate = 0.95;
+    speechSynthesis.cancel(); speechSynthesis.speak(u); } catch(e){}
+}
+
+/* ---------- Toast ---------- */
+let toastT = null;
+function toast(msg, kind=''){
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + kind; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3800);
+}
+
+/* ---------- Carte (Leaflet + plan IGN) ---------- */
+const IGN_URL = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png';
+const OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const map = L.map('map', { zoomControl:false, minZoom:10, maxZoom:18 }).setView([47.472, -0.56], 13);
+const ign = L.tileLayer(IGN_URL, { maxZoom:18, attribution:'Plan IGN © <a href="https://www.ign.fr" target="_blank" rel="noopener">IGN</a>' }).addTo(map);
+const osm = L.tileLayer(OSM_URL, { maxZoom:18, attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' });
+L.control.layers({ 'Plan IGN':ign, 'OpenStreetMap':osm }, null, { position:'bottomright' }).addTo(map);
+L.control.zoom({ position:'topright' }).addTo(map);
+L.control.scale({ imperial:false, position:'bottomleft' }).addTo(map);
+
+const gRoads = L.layerGroup().addTo(map);
+const gTrail = L.layerGroup().addTo(map);
+const gNodes = L.layerGroup().addTo(map);
+const gRings = L.layerGroup().addTo(map);
+const ll = k => N[k].ll;
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// Routes (dessinées une fois, recolorées à chaque tour)
+const roadLines = E.map(e => {
+  const pl = L.polyline([ll(e.a), ll(e.b)], { weight: e.fast ? 7 : 5, opacity:.55, lineCap:'round', interactive:false }).addTo(gRoads);
+  return pl;
+});
+const incMarkers = {};
+
+// Lieux
+const nodeMarkers = {};
+for (const k in N){
+  const n = N[k];
+  const tags = n.tags.map(t => ({ h:'<span class="sg h">H</span>', taxi:'<span class="sg h">TAXI</span>', fuel:'<span class="sg">STATION</span>', charge:'<span class="sg">BORNE</span>' }[t])).join('');
+  const m = L.circleMarker(n.ll, { radius: n.t==='x' ? 6 : 8, weight:3, fillOpacity:1 }).addTo(gNodes);
+  const dir = { r:'right', l:'left', t:'top', b:'bottom' }[n.lp] || 'right';
+  const lbl = n.t === 'f' ? `${n.n} · ${E.find(e=>e.b===k).km} km` : n.n;
+  m.bindTooltip(`${esc(lbl)}${tags ? ' ' + tags : ''}`, { permanent: n.t !== 'x', direction:dir, offset: dir==='left' ? [-8,0] : dir==='right' ? [8,0] : [0, dir==='top' ? -8 : 8], className: 'lbl' + (n.t==='x' ? ' x' : '') });
+  m.on('click', () => tryMove(k));
+  nodeMarkers[k] = m;
+}
+
+// Taxi
+const carIcon = busy => L.divIcon({ className:'', iconSize:[40,26], iconAnchor:[20,15],
+  html:`<div class="car"><i class="${busy ? 'busy' : ''}"></i><b>TAXI</b></div>` });
+const car = L.marker(ll('beaucouze'), { icon:carIcon(false), interactive:false, zIndexOffset:1000, keyboard:false }).addTo(map);
+let carBusy = null;
+
+function centerOn(k, initial){
+  if (initial) map.setView(ll(k), map.getSize().x < 700 ? 14 : 13);
+  else map.panTo(ll(k));
+}
+function followCar(){
+  const p = L.latLng(ll(S.pos));
+  if (!map.getBounds().pad(-0.18).contains(p)) map.panTo(p);
+}
+function renderMap(){
+  const accent = css('--accent'), bad = css('--bad'), ink = css('--ink'), road = css('--maproad'), fast = css('--mapfast'), muted = css('--muted');
+  // routes et imprévus
+  for (const e of E){
+    const pl = roadLines[e.i], inc = S.incidents[e.i];
+    let style = { color: e.fast ? fast : road, opacity:.6, dashArray:null, weight: e.fast ? 7 : 5 };
+    if (e.far) style = { color: muted, opacity:.7, dashArray:'8 8', weight:4 };
+    if (inc) style = inc.block ? { color: ink, opacity:.95, dashArray:'6 8', weight:7 } : { color: bad, opacity:.9, dashArray:null, weight:8 };
+    pl.setStyle(style);
+    if (inc && !incMarkers[e.i]){
+      const mid = [(ll(e.a)[0]+ll(e.b)[0])/2, (ll(e.a)[1]+ll(e.b)[1])/2];
+      incMarkers[e.i] = L.marker(mid, { interactive:true, keyboard:false, icon: L.divIcon({ className:'', iconSize:[24,24], iconAnchor:[12,12], html:`<div class="incb${inc.block?' block':''}">${inc.block?'×':'!'}</div>` }) })
+        .bindTooltip(`${esc(e.name)} : ${INC_LABEL[inc.kind]}`).addTo(gRoads);
+    } else if (!inc && incMarkers[e.i]){ gRoads.removeLayer(incMarkers[e.i]); delete incMarkers[e.i]; }
+  }
+  // chemin conseillé + trajet parcouru
+  gTrail.clearLayers();
+  const target = S.leg ? S.leg.target : null;
+  if (target && (S.M.hint || S.showHint) && !S.anim){
+    const r = route(S.pos, target);
+    if (r) L.polyline(r.path.map(ll), { color:accent, weight:5, dashArray:'2 10', lineCap:'round', interactive:false }).addTo(gTrail);
+  }
+  if (S.leg && S.leg.path.length > 1) L.polyline(S.leg.path.map(ll), { color:accent, weight:6, opacity:.95, interactive:false }).addTo(gTrail);
+  // lieux
+  const neigh = new Set(canDrive() && !S.anim ? ADJ[S.pos].filter(a => edgeMin(a.e) !== Infinity).map(a => a.to) : []);
+  const from = S.client && S.phase === 'approach' ? S.client.from : null;
+  const to = S.client && ['approach','question','ride'].includes(S.phase) ? S.client.to : null;
+  for (const k in N){
+    const m = nodeMarkers[k], n = N[k];
+    let st = { color: ink, fillColor: css('--surface'), radius: n.t==='x' ? 6 : 8, weight:3 };
+    if (neigh.has(k)) st = { color: accent, fillColor: accent, radius: 11, weight:4 };
+    if (k === from) st = { color: css('--ok'), fillColor: css('--ok'), radius: 12, weight:4 };
+    if (k === to) st = { color: bad, fillColor: bad, radius: 12, weight:4 };
+    m.setStyle(st); m.setRadius(st.radius);
+    const el = m.getElement(); if (el) el.classList.toggle('pulse', neigh.has(k) && !reduced);
+  }
+  // taxi
+  const busy = S.phase === 'ride' || S.phase === 'question';
+  if (!S.anim) car.setLatLng(ll(S.pos));
+  if (busy !== carBusy){ car.setIcon(carIcon(busy)); carBusy = busy; }
+}
+function animateCar(from, to, ms, done){
+  if (!ms){ done(); return; }
+  S.anim = true; renderMap();
+  const a = ll(from), b = ll(to), t0 = performance.now();
+  function step(now){
+    const k = Math.min(1, (now - t0) / ms), q = k<0.5 ? 2*k*k : 1 - Math.pow(-2*k+2,2)/2;
+    car.setLatLng([a[0]+(b[0]-a[0])*q, a[1]+(b[1]-a[1])*q]);
+    if (k < 1) requestAnimationFrame(step); else { S.anim = false; done(); }
+  }
+  requestAnimationFrame(step);
+}
+$('#zcar').onclick = () => centerOn(S.pos);
+window.addEventListener('resize', () => map.invalidateSize());
+
+/* ---------- Bandeau ---------- */
+function renderHud(){
+  const started = S.phase !== 'start';
+  $('#hTime').textContent = started ? fmtClock(S.clock) : '--:--';
+  $('#hMeteo').textContent = started ? S.meteo.n : '—';
+  $('#hTarif').textContent = started ? (isNight() ? 'Nuit' : 'Jour') + (isRush() ? ' · pointe' : '') : '—';
+  $('#hCash').textContent = eur(started ? S.cash + S.cpam : 0);
+  $('#hCourses').textContent = started ? (S.M.max < 100 ? `${S.courses} / ${S.M.max}` : String(S.courses)) : '0';
+  const busy = S.phase === 'ride' || S.phase === 'question';
+  const lum = $('#lum'); lum.textContent = busy ? 'OCCUPÉ' : 'LIBRE'; lum.classList.toggle('busy', busy);
+  $('#gEnergyLbl').textContent = started ? S.V.gauge : 'Carburant';
+  const ep = started ? energyPct() : 0, g = $('#gEnergy');
+  g.style.width = (ep*100).toFixed(0) + '%'; g.className = ep < 0.15 ? 'bad' : ep < 0.25 ? 'warn' : '';
+  $('#gEnergyTxt').textContent = started ? `${Math.round(ep*100)} % · ${Math.round(autonomyKm())} km` : '—';
+  const f = started ? S.fatigue : 0, gf = $('#gFat');
+  gf.style.width = f.toFixed(0) + '%'; gf.className = f >= 85 ? 'bad' : f >= 60 ? 'warn' : '';
+  $('#gFatTxt').textContent = started ? `${Math.round(f)} %` : '—';
+}
+
+/* ---------- Panneau ---------- */
+const panel = $('#panel');
+const starsHTML = n => `<span class="stars" aria-label="${n} étoiles sur 5">${'★'.repeat(n)}<span class="off">${'★'.repeat(5-n)}</span></span>`;
+function tripHTML(c){
+  return `<dl class="trip"><dt><span class="pin from"></span>Départ</dt><dd>${esc(N[c.from].n)}</dd><dt><span class="pin to"></span>Arrivée</dt><dd>${esc(N[c.to].n)}</dd></dl>`;
+}
+function rdvHTML(c){
+  if (!c.rdv) return '';
+  const left = Math.round(c.rdv - S.clock);
+  return `<div class="rdv${left < 0 ? ' late' : ''}">Rendez-vous à ${fmtClock(c.rdv)} · ${left >= 0 ? `il reste ${left} min` : `retard de ${-left} min`}</div>`;
+}
+function legHTML(){
+  const L = S.leg; if (!L) return '';
+  return `<div class="legstats"><span>Chemin conseillé : <b>${Math.round(L.opt)} min</b></span><span>Ton temps : <b>${Math.round(L.min)} min</b></span><span>Distance : <b>${L.km.toFixed(1).replace('.',',')} km</b></span></div>`;
+}
+function hintBtn(){
+  if (S.M.hint) return '';
+  return `<button class="btn" data-act="hint">${S.showHint ? "Masquer l'itinéraire" : "Itinéraire conseillé (−10 pts)"}</button>`;
+}
+function renderPanel(){
+  let h = '';
+  if (S.phase === 'start'){
+    const best = +(store.get('taxiAngers.best') || 0);
+    h = `<div class="kicker">Simulateur de courses</div>
+      <h1 class="title">Taxi Angers</h1>
+      <p class="lede">Prends tes clients, trouve le chemin le plus rapide, évite les bouchons, pense au plein et à tes pauses.</p>
+      <fieldset><legend>Mode de jeu</legend><div class="choices">
+        ${Object.entries(MODES).map(([k,m],i)=>`<div class="choice"><input type="radio" name="mode" id="m-${k}" value="${k}" ${i===0?'checked':''}><label for="m-${k}"><b>${m.label}</b><span>${m.desc}</span></label></div>`).join('')}
+      </div></fieldset>
+      <fieldset><legend>Véhicule</legend><div class="choices">
+        ${Object.entries(VEH).map(([k,v],i)=>`<div class="choice"><input type="radio" name="veh" id="v-${k}" value="${k}" ${i===0?'checked':''}><label for="v-${k}"><b>${v.label}</b><span>${String(v.cons).replace('.',',')} ${v.unit}/100 km · ${v.kind==='elec'?'bornes':'stations'}</span></label></div>`).join('')}
+      </div></fieldset>
+      <label class="check"><input type="checkbox" id="optVoice" checked> Lire les clients à voix haute</label>
+      <button class="btn primary" data-act="go">Prendre le service</button>
+      <p class="small">Comment jouer : touche un point jaune sur la carte pour avancer d'un carrefour. Le point vert, c'est le client, le rouge, sa destination.</p>
+      ${best ? `<p class="small">Meilleur score : ${best} points</p>` : ''}`;
+  }
+  else if (S.phase === 'approach'){
+    const c = S.client;
+    h = `<div class="kicker">Nouvelle course · ${esc(c.label)}${c.en ? ' · anglais' : ''}</div>
+      <h2>${esc(c.name)} t'attend à ${esc(N[c.from].n)}</h2>
+      ${tripHTML(c)}${rdvHTML(c)}
+      <p class="howto">Rejoins le point vert. Touche les points jaunes autour du taxi, un carrefour à la fois. Le compteur ne tourne pas encore.</p>
+      ${legHTML()}
+      <div class="btns">${hintBtn()}</div>
+      ${stationActions()}`;
+  }
+  else if (S.phase === 'question'){
+    const c = S.client, a = c.answered;
+    h = `<div class="kicker">Prise en charge · ${esc(N[c.from].n)}</div>
+      <div class="speech" ${c.en ? 'lang="en"' : ''}>
+        <span class="who">${esc(c.name)} · ${esc(c.label)}</span>
+        <q>${esc(c.line)}</q>
+        <div class="btns"><button class="btn" data-act="say">Écouter</button></div>
+        ${c.en ? `<details><summary>Voir la traduction</summary><p lang="fr">${esc(c.tr)}</p></details>` : ''}
+      </div>
+      <p><b>Que réponds-tu ?</b></p>
+      <div class="opts">${c.opts.map((o,i)=>{
+        let cls = 'opt'; if (a){ if (o.ok) cls += ' good'; else if (a.i===i) cls += ' wrong'; }
+        return `<button class="${cls}" data-act="ans" data-i="${i}" ${a?'disabled':''} ${c.en?'lang="en"':''}>${esc(o.t)}${a && c.en && o.tr ? `<small lang="fr">${esc(o.tr)}</small>` : ''}</button>`;
+      }).join('')}</div>
+      ${a ? `<div class="feedback${a.ok?'':' no'}">${a.ok ? 'Bonne réponse. ' : 'Pas idéal. '}${esc(c.opts[a.i].fb)}</div>
+        <button class="btn primary" data-act="ride">Démarrer la course vers ${esc(N[c.to].n)}</button>` : ''}`;
+  }
+  else if (S.phase === 'ride'){
+    const c = S.client;
+    h = `<div class="kicker">En course · ${esc(c.label)}</div>
+      <div class="meter"><span class="amt">${S.meter.toFixed(2).replace('.',',')}</span><span class="lbl">EUR<br>TARIF ${isNight()?'NUIT':'JOUR'}${c.cpam ? '<br>CPAM' : ''}</span></div>
+      <h2>Direction ${esc(N[c.to].n)}</h2>
+      ${rdvHTML(c)}
+      ${legHTML()}
+      <p class="howto">Va jusqu'au point rouge. Les routes rouges sont bouchées, les routes en pointillés noirs sont fermées.</p>
+      <div class="btns">${hintBtn()}</div>`;
+  }
+  else if (S.phase === 'done'){
+    const r = S.result;
+    h = `<div class="kicker">${r.ok ? 'Course terminée' : 'Course perdue'}</div>
+      <h2>${esc(r.client.name)}</h2>
+      ${starsHTML(r.stars)}
+      ${r.ok ? `<div class="meter"><span class="amt">${r.price.toFixed(2).replace('.',',')}</span><span class="lbl">EUR${r.cpam ? '<br>À FACTURER<br>À LA CPAM' : '<br>ENCAISSÉ'}</span></div>` : ''}
+      <ul class="notes">${r.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>
+      ${r.ok ? `<p class="small">+${r.pts} points · ${Math.round(r.min)} min pour ${r.km.toFixed(1).replace('.',',')} km</p>` : ''}
+      <button class="btn primary" data-act="next">${S.courses >= S.M.max || S.clock >= S.M.end ? 'Voir le bilan de la journée' : 'Course suivante'}</button>
+      <p class="small">Avant la prochaine course, tu peux rouler librement jusqu'à une station ou une borne.</p>
+      ${stationActions()}`;
+  }
+  else if (S.phase === 'end'){
+    const avg = S.stars.length ? S.stars.reduce((a,b)=>a+b,0)/S.stars.length : 0;
+    const profit = S.cash + S.cpam - S.energyCost - S.depannage;
+    h = `<div class="kicker">Fin de service · ${fmtClock(S.clock)}</div>
+      <h2>Bilan de ta ${S.mode==='nuit' ? 'nuit' : 'journée'}</h2>
+      ${starsHTML(Math.round(avg))}
+      <table class="bilan"><tbody>
+        <tr><td>Courses</td><td>${S.courses}</td></tr>
+        <tr><td>Note moyenne</td><td>${avg.toFixed(1).replace('.',',')} / 5</td></tr>
+        <tr><td>Kilomètres parcourus</td><td>${S.km.toFixed(1).replace('.',',')} km</td></tr>
+        <tr><td>Encaissé auprès des clients</td><td>${eur(S.cash)}</td></tr>
+        <tr><td>À facturer à la CPAM</td><td>${eur(S.cpam)}</td></tr>
+        <tr><td>${S.V.kind==='elec' ? 'Recharges' : 'Carburant'}</td><td>−${eur(S.energyCost)}</td></tr>
+        ${S.depannage ? `<tr><td>Dépannage</td><td>−${eur(S.depannage)}</td></tr>` : ''}
+        <tr class="total"><td><b>Bénéfice de la journée</b></td><td>${eur(profit)}</td></tr>
+      </tbody></table>
+      <p class="small">Avant loyer de la licence, assurance et charges. Tarifs indicatifs pour l'entraînement : les vrais tarifs sont fixés chaque année par arrêté préfectoral.</p>
+      <p><b>${S.points} points</b>${S.newBest ? ' · nouveau record !' : ` · record : ${S.best}`}</p>
+      <button class="btn primary" data-act="restart">Nouvelle partie</button>`;
+  }
+  panel.innerHTML = h;
+}
+function render(){ renderHud(); renderPanel(); renderMap(); }
+
+panel.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b || S.anim) return;
+  const act = b.dataset.act;
+  if (act === 'go'){
+    const mode = panel.querySelector('input[name="mode"]:checked').value;
+    const veh = panel.querySelector('input[name="veh"]:checked').value;
+    newGame(mode, veh, $('#optVoice').checked);
+  }
+  else if (act === 'hint'){ S.showHint = !S.showHint; if (S.showHint && S.leg) S.leg.hint = true; render(); }
+  else if (act === 'say'){ const v = S.voice; S.voice = true; say(S.client.line, S.client.en); S.voice = v; }
+  else if (act === 'ans') answer(+b.dataset.i);
+  else if (act === 'ride') startRide();
+  else if (act === 'next') nextCourse();
+  else if (act === 'fuel') doFuel();
+  else if (act === 'charge') doCharge();
+  else if (act === 'pause') doPause();
+  else if (act === 'restart'){ S.phase = 'start'; S.client = null; S.leg = null; S.incidents = {}; S.pos = 'beaucouze'; render(); }
+});
+
+render();
+requestAnimationFrame(() => centerOn('beaucouze', true));
+})();
+</script>
+</body>
+</html>
