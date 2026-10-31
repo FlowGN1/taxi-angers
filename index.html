@@ -15,7 +15,7 @@
   --land:#ebe6d7; --water:#b4cfe2; --road:#ffffff; --case:#b9c3cf; --fast:#f3e2a6;
   --accent:#e2a200; --accent-ink:#1d1600; --ok:#15915a; --bad:#cc3a2b; --warn:#cf6f15;
   --sign:#2557a8; --sign-ink:#ffffff;
-  --meter-bg:#131614; --maproad:#5a6b7d; --mapfast:#c98a00; --meter:#ff6b3d;
+  --meter-bg:#131614; --oneway:#1f5fd1; --meter:#ff6b3d;
   --f-display:"Barlow Condensed","Arial Narrow",sans-serif;
   --f-body:"Atkinson Hyperlegible",system-ui,-apple-system,sans-serif;
   --f-mono:"Share Tech Mono",ui-monospace,Menlo,monospace;
@@ -24,13 +24,13 @@
   --bg:#0f151c; --surface:#17202a; --surface2:#1c2733; --ink:#e5eaf0; --muted:#95a3b2; --line:#2a3644;
   --land:#1a232d; --water:#22405a; --road:#3b4858; --case:#0c1117; --fast:#6b5a22;
   --accent:#f3b623; --accent-ink:#1d1600; --ok:#3cc283; --bad:#f06a58; --warn:#f0954a;
-  --sign:#4d82d6; --sign-ink:#ffffff; --maproad:#5a6b7d; --mapfast:#c98a00; color-scheme:dark;
+  --sign:#4d82d6; --sign-ink:#ffffff; --oneway:#1f5fd1; color-scheme:dark;
 }}
 :root[data-theme="dark"]{
   --bg:#0f151c; --surface:#17202a; --surface2:#1c2733; --ink:#e5eaf0; --muted:#95a3b2; --line:#2a3644;
   --land:#1a232d; --water:#22405a; --road:#3b4858; --case:#0c1117; --fast:#6b5a22;
   --accent:#f3b623; --accent-ink:#1d1600; --ok:#3cc283; --bad:#f06a58; --warn:#f0954a;
-  --sign:#4d82d6; --sign-ink:#ffffff; --maproad:#5a6b7d; --mapfast:#c98a00; color-scheme:dark;
+  --sign:#4d82d6; --sign-ink:#ffffff; --oneway:#1f5fd1; color-scheme:dark;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -148,10 +148,14 @@ table.bilan tr.total td{border-bottom:0;font-size:1.1rem}
 path.pulse{animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{50%{stroke-opacity:.35;fill-opacity:.5}}
 @media (prefers-reduced-motion:reduce){path.pulse{animation:none}.bar i{transition:none}}
+#map.zlow .leaflet-tooltip.lbl,#map.zlow .stn{display:none}
+.stn{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid var(--surface);box-shadow:0 1px 3px rgb(0 0 0 / .3)}
+.stn.fuel{background:var(--warn);color:#fff}
+.stn.charge{background:var(--oneway);color:#fff}
+.loading{position:absolute;inset:auto 12px 40px 12px;z-index:600;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-weight:700;box-shadow:0 6px 20px rgb(0 0 0 / .18)}
 </style>
 </head>
 <body>
-
 <div class="app">
   <header class="hud">
     <div class="brand"><span class="lum" id="lum">LIBRE</span><b>Taxi Angers</b></div>
@@ -159,6 +163,7 @@ path.pulse{animation:pulse 1.4s ease-in-out infinite}
       <div class="stat"><span>Heure</span><b id="hTime">--:--</b></div>
       <div class="stat"><span>Météo</span><b id="hMeteo">—</b></div>
       <div class="stat"><span>Tarif</span><b id="hTarif">—</b></div>
+      <div class="stat"><span>Secteur</span><b id="hZone">—</b></div>
       <div class="stat"><span>Recettes</span><b id="hCash">0,00 €</b></div>
       <div class="stat"><span>Courses</span><b id="hCourses">0</b></div>
       <div class="gauge"><span id="gEnergyLbl">Carburant</span><div class="row"><div class="bar"><i id="gEnergy" style="width:0%"></i></div><b id="gEnergyTxt">—</b></div></div>
@@ -166,138 +171,63 @@ path.pulse{animation:pulse 1.4s ease-in-out infinite}
     </div>
   </header>
   <main class="main">
-    <section class="mapwrap" aria-label="Plan d'Angers">
+    <section class="mapwrap" aria-label="Carte d'Angers">
       <div id="map"></div>
-      <div class="mapctl">
-        <button id="zcar" class="wide" aria-label="Centrer sur le taxi">Taxi</button>
-      </div>
+      <div class="mapctl"><button id="zcar" class="wide" aria-label="Centrer sur le taxi">Taxi</button></div>
       <div class="toast" id="toast" role="status" hidden></div>
-      <p class="mapnote">Carrefours du jeu : positions approximatives</p>
+      <div class="loading" id="loading" hidden></div>
     </section>
     <aside class="panel" id="panel" aria-live="polite"></aside>
   </main>
 </div>
-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 (() => {
 'use strict';
 const $ = s => document.querySelector(s);
 const reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const pick = a => a[Math.floor(Math.random()*a.length)];
+const rand = (a,b) => a + Math.random()*(b-a);
+const pad = n => String(n).padStart(2,'0');
+function fmtClock(m){ const t = ((Math.round(m) % 1440) + 1440) % 1440; return pad(Math.floor(t/60)) + ':' + pad(t%60); }
+const fmtH = m => fmtClock(m).replace(':','h');
+const eur = n => n.toFixed(2).replace('.', ',') + ' €';
+const dec = (n,d=1) => n.toFixed(d).replace('.', ',');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+const store = { get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }, set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} } };
+const ceil5 = m => Math.ceil(m/5)*5;
+function km(la1,lo1,la2,lo2){ const x=(lo2-lo1)*Math.cos((la1+la2)*Math.PI/360)*111.32, y=(la2-la1)*110.57; return Math.hypot(x,y); }
 
-/* ---------- Géographie ---------- */
-const LON0 = -0.664, LAT1 = 47.537, K = 7246, COSL = 0.6763;
-const VBW = 1010, VBH = 862;
-const proj = (lat, lon) => [ (lon - LON0) * COSL * K, (LAT1 - lat) * K ];
-
-// t: p = lieu, x = carrefour, f = lointain. lp = position du nom (r, l, t, b)
-const N = {
-  beaucouze:  {ll:[47.4745,-0.6330], n:"Beaucouzé", t:'p', tags:['taxi','fuel'], lp:'b'},
-  a11:        {ll:[47.4815,-0.6400], n:"Échangeur A11", t:'x', lp:'t'},
-  nantes:     {ll:[47.4930,-0.6565], n:"Gare de Nantes", t:'f', lp:'t'},
-  aeroport:   {ll:[47.4650,-0.6565], n:"Aéroport Nantes-Atlantique", t:'f', lp:'b'},
-  atoll:      {ll:[47.4790,-0.6250], n:"L'Atoll", t:'p', tags:['fuel','charge'], lp:'t'},
-  belle:      {ll:[47.4792,-0.5995], n:"Belle-Beille", t:'p', lp:'t'},
-  grandmaine: {ll:[47.4705,-0.5930], n:"Grand Maine", t:'p', tags:['fuel','charge'], lp:'b'},
-  pattonx:    {ll:[47.4772,-0.5800], n:"Av. Patton", t:'x', lp:'b'},
-  lacmaine:   {ll:[47.4540,-0.5870], n:"Lac de Maine", t:'p', lp:'b'},
-  bassechaine:{ll:[47.4683,-0.5645], n:"Basse-Chaîne", t:'x', lp:'l'},
-  doutre:     {ll:[47.4757,-0.5650], n:"La Doutre", t:'p', lp:'l'},
-  verdun:     {ll:[47.4732,-0.5574], n:"Pont de Verdun", t:'x', lp:'r'},
-  chateau:    {ll:[47.4697,-0.5596], n:"Château", t:'p', lp:'l'},
-  ralliement: {ll:[47.4712,-0.5522], n:"Ralliement", t:'p', lp:'r'},
-  foch:       {ll:[47.4693,-0.5462], n:"Bd Foch", t:'p', lp:'r'},
-  gare:       {ll:[47.4645,-0.5565], n:"Gare Saint-Laud", t:'p', tags:['taxi','charge'], lp:'b'},
-  confluences:{ll:[47.4805,-0.5572], n:"Pont Confluences", t:'x', lp:'l'},
-  chu:        {ll:[47.4812,-0.5530], n:"CHU d'Angers", t:'p', tags:['h'], lp:'t'},
-  saintserge: {ll:[47.4790,-0.5440], n:"Saint-Serge", t:'p', lp:'r'},
-  monplaisir: {ll:[47.4935,-0.5360], n:"Monplaisir", t:'p', lp:'r'},
-  rnord:      {ll:[47.4990,-0.5560], n:"Rocade nord", t:'x', lp:'l'},
-  terra:      {ll:[47.5095,-0.5545], n:"Terra Botanica", t:'p', lp:'t'},
-  avrille:    {ll:[47.5065,-0.5885], n:"Avrillé", t:'p', lp:'t'},
-  ecouflant:  {ll:[47.5290,-0.5270], n:"Écouflant", t:'p', lp:'r'},
-  montaigne:  {ll:[47.4720,-0.5265], n:"Av. Montaigne", t:'x', lp:'t'},
-  stbarth:    {ll:[47.4690,-0.4950], n:"Saint-Barthélemy", t:'p', tags:['fuel'], lp:'t'},
-  a87x:       {ll:[47.4590,-0.5060], n:"Échangeur A87", t:'x', lp:'l'},
-  trelaze:    {ll:[47.4465,-0.4665], n:"Trélazé", t:'p', lp:'b'},
-  pole:       {ll:[47.4545,-0.4870], n:"Pôle santé Trélazé", t:'p', tags:['h'], lp:'r'},
-  justices:   {ll:[47.4590,-0.5345], n:"Les Justices", t:'p', lp:'r'},
-  roseraie:   {ll:[47.4500,-0.5470], n:"La Roseraie", t:'p', lp:'r'},
-  rocsud:     {ll:[47.4470,-0.5660], n:"Rocade sud", t:'x', lp:'b'},
-  ponts:      {ll:[47.4245,-0.5260], n:"Les Ponts-de-Cé", t:'p', tags:['fuel'], lp:'r'},
+/* ---------- Lieux du jeu ---------- */
+const P = {
+  beaucouze:  {ll:[47.4744,-0.6335], n:"Beaucouzé (bourg)", tags:['taxi'], beau:true},
+  atoll:      {ll:[47.4793,-0.6255], n:"L'Atoll", beau:true},
+  belle:      {ll:[47.4792,-0.5995], n:"Belle-Beille"},
+  grandmaine: {ll:[47.4705,-0.5930], n:"Grand Maine"},
+  lacmaine:   {ll:[47.4560,-0.5850], n:"Lac de Maine"},
+  doutre:     {ll:[47.4757,-0.5650], n:"La Doutre"},
+  chateau:    {ll:[47.4699,-0.5597], n:"Château"},
+  ralliement: {ll:[47.4714,-0.5517], n:"Ralliement"},
+  foch:       {ll:[47.4693,-0.5470], n:"Bd Foch"},
+  gare:       {ll:[47.4645,-0.5567], n:"Gare Saint-Laud"},
+  chu:        {ll:[47.4806,-0.5543], n:"CHU d'Angers", tags:['h']},
+  saintserge: {ll:[47.4790,-0.5440], n:"Saint-Serge"},
+  monplaisir: {ll:[47.4935,-0.5360], n:"Monplaisir"},
+  terra:      {ll:[47.5095,-0.5545], n:"Terra Botanica"},
+  avrille:    {ll:[47.5065,-0.5885], n:"Avrillé"},
+  ecouflant:  {ll:[47.5290,-0.5270], n:"Écouflant"},
+  stbarth:    {ll:[47.4690,-0.4950], n:"Saint-Barthélemy"},
+  trelaze:    {ll:[47.4465,-0.4665], n:"Trélazé"},
+  pole:       {ll:[47.4545,-0.4870], n:"Pôle santé Trélazé", tags:['h']},
+  justices:   {ll:[47.4590,-0.5345], n:"Les Justices"},
+  roseraie:   {ll:[47.4500,-0.5470], n:"La Roseraie"},
+  ponts:      {ll:[47.4245,-0.5260], n:"Les Ponts-de-Cé"},
+  a11:        {ll:[47.4815,-0.6400], n:"A11 (vers Nantes)", tags:['a11']},
 };
-for (const k in N){ const [x,y] = proj(...N[k].ll); N[k].x = x; N[k].y = y; N[k].id = k; N[k].tags = N[k].tags || []; }
-
-// [a, b, nom, vitesse km/h, km fixe]
-const ROADS = [
-  ['beaucouze','atoll',"Route de Beaucouzé",50],
-  ['beaucouze','a11',"Accès A11",70],
-  ['atoll','a11',"Accès A11",70],
-  ['a11','nantes',"A11 vers Nantes",120,88],
-  ['a11','aeroport',"A11 vers l'aéroport",110,97],
-  ['beaucouze','grandmaine',"Route de Nantes",50],
-  ['atoll','belle',"Av. Patton",60],
-  ['belle','pattonx',"Av. Patton",50],
-  ['belle','grandmaine',"Rue de Belle-Beille",40],
-  ['grandmaine','pattonx',"Route de Nantes",50],
-  ['grandmaine','lacmaine',"Bd du Lac",50],
-  ['belle','avrille',"Liaison nord-ouest",60],
-  ['pattonx','doutre',"Av. René Gasnier",50],
-  ['lacmaine','bassechaine',"Route de la Baumette",40],
-  ['bassechaine','doutre',"Quai Monge",30],
-  ['bassechaine','chateau',"Pont de la Basse-Chaîne",40],
-  ['doutre','verdun',"Pont de Verdun",30],
-  ['doutre','confluences',"Pont Confluences",40],
-  ['doutre','avrille',"Av. Pierre Mendès-France",50],
-  ['confluences','chu',"Rue Larrey",30],
-  ['confluences','verdun',"Voie des Berges",50],
-  ['verdun','chateau',"Voie des Berges",50],
-  ['verdun','ralliement',"Centre-ville",30],
-  ['chateau','ralliement',"Centre-ville",30],
-  ['chateau','gare',"Bd du Roi René",40],
-  ['ralliement','foch',"Rue d'Alsace",30],
-  ['ralliement','chu',"Bd Ayrault",40],
-  ['gare','foch',"Bd Foch",40],
-  ['foch','saintserge',"Bd Carnot",40],
-  ['chu','saintserge',"Rue Larrey",30],
-  ['chu','rnord',"Liaison CHU nord",50],
-  ['saintserge','monplaisir',"Av. Jean Joxé",50],
-  ['foch','montaigne',"Av. Montaigne",50],
-  ['montaigne','stbarth',"Av. Montaigne",50],
-  ['montaigne','justices',"Rue Saint-Léonard",40],
-  ['montaigne','monplaisir',"Liaison est",50],
-  ['avrille','rnord',"Rocade nord",70],
-  ['rnord','terra',"Accès Terra Botanica",40],
-  ['rnord','monplaisir',"Rocade nord",70],
-  ['terra','ecouflant',"Route d'Écouflant",60],
-  ['monplaisir','ecouflant',"Route d'Écouflant",60],
-  ['monplaisir','stbarth',"Rocade est",70],
-  ['stbarth','a87x',"A87",90],
-  ['justices','a87x',"Rocade est",70],
-  ['a87x','trelaze',"A87",90],
-  ['a87x','pole',"Route de Trélazé",50],
-  ['pole','trelaze',"Av. de la République",50],
-  ['stbarth','pole',"Route de Saint-Barthélemy",50],
-  ['gare','justices',"Rue des Justices",40],
-  ['gare','roseraie',"Av. Victor Châtenay",50],
-  ['justices','roseraie',"Rue de la Roseraie",40],
-  ['roseraie','ponts',"Route des Ponts-de-Cé",60],
-  ['roseraie','rocsud',"Rocade sud",70],
-  ['rocsud','lacmaine',"Rocade sud",70],
-  ['chateau','rocsud',"Voie des Berges sud",60],
-  ['trelaze','ponts',"Route des Ardoisières",60],
-];
-function hav(a,b){ const R=6371, r=Math.PI/180, dLat=(b[0]-a[0])*r, dLon=(b[1]-a[1])*r;
-  const s=Math.sin(dLat/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
-const CENTER_RE = /Foch|Roi René|Carnot|Ayrault|Centre|Verdun|Berges|Montaigne|Alsace|Larrey/;
-const E = ROADS.map((r,i) => ({ i, a:r[0], b:r[1], name:r[2], v:r[3],
-  km: r[4] || +(hav(N[r[0]].ll, N[r[1]].ll)*1.3).toFixed(2),
-  fast: r[3] >= 60, far: !!r[4], center: CENTER_RE.test(r[2]) }));
-const ADJ = {}; for (const k in N) ADJ[k] = [];
-for (const e of E){ ADJ[e.a].push({e, to:e.b}); ADJ[e.b].push({e, to:e.a}); }
-
-const MAINE = [[47.537,-0.575],[47.52,-0.568],[47.505,-0.5655],[47.49,-0.5615],[47.481,-0.5585],[47.473,-0.5590],[47.468,-0.5615],[47.46,-0.566],[47.45,-0.5745],[47.44,-0.585],[47.428,-0.598],[47.418,-0.612]];
-const LOIRE = [[47.433,-0.45],[47.429,-0.49],[47.4245,-0.52],[47.423,-0.545],[47.421,-0.575],[47.419,-0.61],[47.417,-0.67]];
+for (const k in P){ P[k].id = k; P[k].tags = P[k].tags || []; }
+const FAR = { nantes:{ n:"Gare de Nantes", km:88 }, aeroport:{ n:"Aéroport Nantes-Atlantique", km:97 } };
+const placeName = k => FAR[k] ? FAR[k].n : P[k].n;
 
 /* ---------- Règles ---------- */
 const TARIF = { pec:4.40, jour:1.22, nuit:1.83, attenteMin:0.55, mini:8.00 };
@@ -307,32 +237,29 @@ const VEH = {
   elec:{ label:"Électrique", unit:"kWh", cap:77, cons:19, price:0.49, kind:'elec', gauge:"Batterie", start:[0.22,0.32] },
 };
 const MODES = {
-  journee:{ label:"Journée", desc:"7h30 – 19h · 6 courses", start:450, end:1140, max:6, hint:false, incP:0.25, fat:1 },
-  nuit:{ label:"Nuit", desc:"21h – 3h · tarif de nuit", start:1260, end:1620, max:6, hint:false, incP:0.25, fat:1.4 },
-  anglais:{ label:"Anglais", desc:"Tous les clients parlent anglais", start:540, end:1140, max:6, hint:false, incP:0.2, fat:1, en:true },
-  decouverte:{ label:"Découverte", desc:"Sans limite · chemin conseillé affiché", start:600, end:1e9, max:999, hint:true, incP:0.12, fat:0.7 },
+  journee:{ label:"Journée", desc:"7h30 – 19h · 6 courses", start:450, end:1140, max:6, hint:false, incP:0.3, fat:1, hop:1.5 },
+  nuit:{ label:"Nuit", desc:"21h – 3h · tarif de nuit", start:1260, end:1620, max:6, hint:false, incP:0.3, fat:1.4, hop:1.5 },
+  anglais:{ label:"Anglais", desc:"Tous les clients parlent anglais", start:540, end:1140, max:6, hint:false, incP:0.25, fat:1, en:true, hop:1.5 },
+  decouverte:{ label:"Découverte", desc:"Sans limite · chemin conseillé affiché", start:600, end:1e9, max:999, hint:true, incP:0.15, fat:0.7, hop:3 },
 };
-const METEO = [
-  { n:"Soleil", f:1, w:50 }, { n:"Pluie", f:0.85, w:25 }, { n:"Brouillard", f:0.8, w:13 }, { n:"Neige", f:0.6, w:12 },
-];
+const METEO = [ { n:"Soleil", f:1, w:50 }, { n:"Pluie", f:0.85, w:25 }, { n:"Brouillard", f:0.8, w:13 }, { n:"Neige", f:0.6, w:12 } ];
 const INC_LABEL = { bouchon:"bouchon", accident:"accident, route fermée", travaux:"travaux, route barrée" };
-
 const RES = ['beaucouze','avrille','stbarth','trelaze','ponts','monplaisir','roseraie','ecouflant','justices','belle','lacmaine','doutre'];
-const TYPES = {
-  cpam:{ label:"Transport médical (CPAM)", from:RES, to:['chu','pole'], cpam:true },
-  gare:{ label:"Voyageur avec valises", from:['gare'], to:RES.concat(['grandmaine','atoll']) },
-  touriste:{ label:"Touriste", from:['gare','ralliement'], to:['chateau','terra','lacmaine','doutre'] },
-  agee:{ label:"Personne âgée", from:RES, to:['grandmaine','ralliement','chu','foch'] },
-  bebe:{ label:"Parent avec bébé", from:RES, to:['grandmaine','atoll','gare','chu'] },
-  fauteuil:{ label:"Client en fauteuil roulant", from:RES, to:['chu','pole','grandmaine'] },
-  affaires:{ label:"Client d'affaires", from:['gare','ralliement','atoll'], to:['atoll','gare','saintserge','belle'] },
-  long:{ label:"Course longue", from:['gare','ralliement','beaucouze'], to:['nantes','aeroport'] },
-  nuit:{ label:"Sortie de soirée", from:['ralliement','foch','doutre','saintserge'], to:RES },
+const PROFILES = {
+  cpam:{ label:"Transport médical CPAM", q:'cpam', from:RES, to:['chu','pole'], cpam:true },
+  valises:{ label:"Voyageur avec valises", q:'gare', from:RES, to:['gare'] },
+  touriste:{ label:"Touriste", q:'touriste', from:['gare','ralliement'], to:['chateau','terra','lacmaine','doutre'] },
+  agee:{ label:"Personne âgée", q:'agee', from:RES, to:['grandmaine','ralliement','chu','foch'] },
+  bebe:{ label:"Parent avec bébé", q:'bebe', from:RES, to:['grandmaine','atoll','gare','chu'] },
+  fauteuil:{ label:"Client en fauteuil roulant", q:'fauteuil', from:RES, to:['chu','pole','grandmaine'] },
+  affaires:{ label:"Client d'affaires", q:'affaires', from:['gare','ralliement','atoll'], to:['atoll','gare','saintserge','belle'] },
+  long:{ label:"Course longue", q:'long', from:['gare','ralliement','beaucouze','atoll'], to:['nantes','aeroport'] },
+  nuit:{ label:"Sortie de soirée", q:'nuit', from:['ralliement','foch','doutre','saintserge'], to:RES },
 };
 const NAMES_FR = ["Mme Bertin","M. Lemoine","Mme Rousseau","M. Garnier","Mme Chevalier","M. Fournier","Mme Leroy","M. Bonnet","Mme Morel","M. Girard"];
 const NAMES_EN = ["Emily Carter","James Wilson","Sophie Brooks","Daniel Hughes","Olivia Taylor","Mr Patel","Grace Murphy","Tom Evans"];
 
-// Questions : [texte, juste ?, explication, traduction (anglais)]
+// Questions : [texte, juste ?, explication, traduction]
 const QB = {
   cpam:{
     fr:{ line:"Bonjour ! J'ai rendez-vous à {rdv} à {dest}. On sera à l'heure ?", opts:[
@@ -426,72 +353,251 @@ const QB = {
       ["Only over fifty euros.",0,"Faux : quel que soit le montant.","Seulement au-dessus de 50 euros."]]}},
 };
 
-/* ---------- Outils ---------- */
-const pick = a => a[Math.floor(Math.random()*a.length)];
-const rand = (a,b) => a + Math.random()*(b-a);
-const pad = n => String(n).padStart(2,'0');
-function fmtClock(m){ const t = ((Math.round(m) % 1440) + 1440) % 1440; return pad(Math.floor(t/60)) + ':' + pad(t%60); }
-const eur = n => n.toFixed(2).replace('.', ',') + ' €';
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
-const store = { get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }, set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} } };
+
+QB.passant = { fr:{ line:"Taxi ! Vous êtes libre ? Je vais à la gare.", opts:[
+  ["Désolée, ici je ne peux prendre que des clients qui ont réservé. Vous pouvez me réserver par téléphone.",1,"Exact : ton taxi est rattaché à Beaucouzé. Ailleurs, tu ne charges que sur réservation préalable."],
+  ["Oui, montez !",0,"Interdit : hors de ta commune de rattachement, prendre un client sans réservation, c'est de la maraude. Tu risques une amende."],
+  ["Je fais semblant de ne pas le voir.",0,"Pas d'amende, mais pas très commercial : explique la règle et propose une réservation."]]} };
+
+/* ---------- Réseau routier OpenStreetMap ---------- */
+const BBOX = { s:47.412, w:-0.662, n:47.537, e:-0.452 };
+const HW = 'motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street';
+const QUERY = `[out:json][timeout:180];(way["highway"~"^(${HW})$"]["access"!~"^(no|private)$"]["motor_vehicle"!~"^(no|private)$"](${BBOX.s},${BBOX.w},${BBOX.n},${BBOX.e});nwr["amenity"~"^(fuel|charging_station)$"]["access"!~"^(no|private)$"](${BBOX.s},${BBOX.w},${BBOX.n},${BBOX.e});relation["boundary"="administrative"]["admin_level"="8"]["name"="Beaucouzé"];);out geom qt;`;
+const ENDPOINTS = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.private.coffee/api/interpreter'];
+const SPEED = {motorway:110,motorway_link:60,trunk:90,trunk_link:50,primary:50,primary_link:40,secondary:50,secondary_link:40,tertiary:45,tertiary_link:35,unclassified:40,residential:30,living_street:15};
+const MAJOR = /^(motorway|trunk|primary|secondary|tertiary)$/;
+const CENTER = { s:47.460, n:47.486, w:-0.567, e:-0.535 };
+const G = { ready:false };
+
+function buildGraph(json){
+  const ways = [], rels = [], rawSt = [];
+  for (const el of json.elements){
+    const am = el.tags && el.tags.amenity;
+    if (am === 'fuel' || am === 'charging_station'){
+      let lat = el.lat, lon = el.lon;
+      if (lat === undefined && el.geometry && el.geometry.length){ lat = el.geometry.reduce((a,p)=>a+p.lat,0)/el.geometry.length; lon = el.geometry.reduce((a,p)=>a+p.lon,0)/el.geometry.length; }
+      else if (lat === undefined && el.bounds){ lat = (el.bounds.minlat+el.bounds.maxlat)/2; lon = (el.bounds.minlon+el.bounds.maxlon)/2; }
+      if (lat !== undefined){ const t = el.tags; rawSt.push({ kind: am === 'fuel' ? 'fuel' : 'charge', lat, lon,
+        name: t.name || t.brand || t.operator || (am === 'fuel' ? 'Station-service' : 'Borne de recharge') }); }
+      continue;
+    }
+    if (el.type === 'way' && el.nodes && el.geometry && el.nodes.length === el.geometry.length && el.tags && el.tags.highway) ways.push(el);
+    else if (el.type === 'relation') rels.push(el);
+  }
+  const use = new Map();
+  for (const w of ways){ const n = w.nodes; for (let i=0;i<n.length;i++) use.set(n[i], (use.get(n[i])||0) + ((i===0||i===n.length-1) ? 2 : 1)); }
+  const vid = new Map(), vlat = [], vlon = [];
+  const V = id => { let k = vid.get(id); if (k === undefined){ k = vlat.length; vid.set(id,k); vlat.push(0); vlon.push(0); } return k; };
+  const segs = [];
+  for (const w of ways){
+    const t = w.tags || {}, hw = t.highway;
+    let sp = SPEED[hw] || 30; const ms = parseInt(t.maxspeed,10); if (ms > 0 && ms <= 130) sp = ms;
+    let ow = 0; const o = t.oneway;
+    if (o === 'yes' || o === 'true' || o === '1') ow = 1;
+    else if (o === '-1' || o === 'reverse') ow = -1;
+    else if (o !== 'no' && (t.junction === 'roundabout' || t.junction === 'circular' || hw === 'motorway' || hw === 'motorway_link')) ow = 1;
+    const n = w.nodes, g = w.geometry; let start = 0;
+    for (let j=1;j<n.length;j++){
+      if (j === n.length-1 || use.get(n[j]) >= 2){
+        const a = V(n[start]), b = V(n[j]);
+        vlat[a] = g[start].lat; vlon[a] = g[start].lon; vlat[b] = g[j].lat; vlon[b] = g[j].lon;
+        const geom = []; let L = 0;
+        for (let i=start;i<=j;i++){ geom.push([g[i].lat, g[i].lon]); if (i > start) L += km(g[i-1].lat,g[i-1].lon,g[i].lat,g[i].lon); }
+        if (a !== b && L > 0){
+          const mid = geom[Math.floor(geom.length/2)];
+          segs.push({ a, b, geom, km:L, hw, name:t.name || t.ref || '', ow, v:sp, major:MAJOR.test(hw),
+            mid, center: MAJOR.test(hw) && mid[0]>CENTER.s && mid[0]<CENTER.n && mid[1]>CENTER.w && mid[1]<CENTER.e });
+        }
+        start = j;
+      }
+    }
+  }
+  const nV = vlat.length, out = Array.from({length:nV}, () => []), inn = Array.from({length:nV}, () => []);
+  const eSeg = [], eFrom = [], eTo = [], eDir = [];
+  const add = (s,f,t,d) => { const e = eSeg.length; eSeg.push(s); eFrom.push(f); eTo.push(t); eDir.push(d); out[f].push(e); inn[t].push(e); };
+  segs.forEach((s,i) => { if (s.ow !== -1) add(i, s.a, s.b, 1); if (s.ow !== 1) add(i, s.b, s.a, -1); });
+  Object.assign(G, { vlat:Float64Array.from(vlat), vlon:Float64Array.from(vlon), nV, segs, out, inn,
+    eSeg:Int32Array.from(eSeg), eFrom:Int32Array.from(eFrom), eTo:Int32Array.from(eTo), eDir:Int8Array.from(eDir) });
+  // composante fortement connexe autour du centre
+  let c = 0, bd = Infinity;
+  for (let i=0;i<nV;i++){ const d = km(47.4714,-0.5517,G.vlat[i],G.vlon[i]); if (d < bd && out[i].length && inn[i].length){ bd = d; c = i; } }
+  const reach = (adj, dirTo) => { const seen = new Uint8Array(nV), st = [c]; seen[c] = 1;
+    while (st.length){ const u = st.pop(); for (const e of adj[u]){ const v = dirTo ? G.eTo[e] : G.eFrom[e]; if (!seen[v]){ seen[v] = 1; st.push(v); } } } return seen; };
+  const f = reach(out, true), b = reach(inn, false);
+  G.good = new Uint8Array(nV); for (let i=0;i<nV;i++) G.good[i] = f[i] && b[i] ? 1 : 0;
+  // grille pour l'accrochage
+  G.cell = 0.004; G.grid = new Map();
+  for (let i=0;i<nV;i++){ if (!G.good[i]) continue; const key = Math.floor(G.vlat[i]/G.cell) + ':' + Math.floor(G.vlon[i]/G.cell);
+    let a = G.grid.get(key); if (!a){ a = []; G.grid.set(key,a); } a.push(i); }
+  G.dist = new Float64Array(nV); G.prev = new Int32Array(nV);
+  // contour de Beaucouzé
+  G.beau = null;
+  const rel = rels.find(r => r.members);
+  if (rel){
+    const parts = rel.members.filter(m => m.type==='way' && (m.role==='outer' || m.role==='') && m.geometry).map(m => m.geometry.map(p => [p.lat,p.lon]));
+    if (parts.length){
+      const ring = parts.shift(); let guard = 0;
+      const same = (p,q) => Math.abs(p[0]-q[0]) < 1e-6 && Math.abs(p[1]-q[1]) < 1e-6;
+      while (parts.length && guard++ < 500){
+        const last = ring[ring.length-1]; const i = parts.findIndex(p => same(p[0],last) || same(p[p.length-1],last));
+        if (i < 0) break; let p = parts.splice(i,1)[0]; if (!same(p[0],last)) p = p.reverse(); ring.push(...p.slice(1));
+      }
+      if (ring.length > 10) G.beau = ring;
+    }
+  }
+  // lieux
+  for (const k in P){
+    const p = P[k];
+    if (k === 'a11'){
+      let best = -1, bd2 = Infinity;
+      for (let i=0;i<nV;i++){ if (!G.good[i]) continue; if (!out[i].some(e => segs[G.eSeg[e]].hw === 'motorway')) continue;
+        const d = km(p.ll[0],p.ll[1],G.vlat[i],G.vlon[i]); if (d < bd2){ bd2 = d; best = i; } }
+      p.v = best >= 0 && bd2 < 4 ? best : nearest(p.ll[0], p.ll[1], 3);
+    } else p.v = nearest(p.ll[0], p.ll[1], 1) ?? nearest(p.ll[0], p.ll[1], 4);
+    p.vll = [G.vlat[p.v], G.vlon[p.v]];
+  }
+  G.stations = [];
+  for (const st of rawSt){ const v = nearest(st.lat, st.lon, 0.2); if (v === null) continue;
+    if (G.stations.some(o => o.kind === st.kind && km(o.lat,o.lon,st.lat,st.lon) < 0.03)) continue;
+    st.v = v; G.stations.push(st); }
+  G.ready = true;
+}
+function stationHere(kind){
+  const [la, lo] = carLL();
+  return G.stations.find(st => st.kind === kind && (st.v === S.v || km(la,lo,st.lat,st.lon) < 0.12)) || null;
+}
+function nearestStation(kind){
+  const [la, lo] = carLL();
+  const cands = G.stations.filter(st => st.kind === kind).sort((a,b) => km(la,lo,a.lat,a.lon) - km(la,lo,b.lat,b.lon)).slice(0, 6);
+  let best = null;
+  for (const st of cands){ const r = route(S.v, st.v); if (r && (!best || r.min < best.r.min)) best = { st, r }; }
+  return best;
+}
+function nearest(lat, lon, maxKm){
+  const ci = Math.floor(lat/G.cell), cj = Math.floor(lon/G.cell), R = Math.ceil(maxKm / (G.cell*75)) + 1;
+  let best = null, bd = maxKm;
+  for (let r=0;r<=R;r++){
+    for (let i=ci-r;i<=ci+r;i++) for (let j=cj-r;j<=cj+r;j++){
+      if (Math.max(Math.abs(i-ci),Math.abs(j-cj)) !== r) continue;
+      const a = G.grid.get(i+':'+j); if (!a) continue;
+      for (const v of a){ const d = km(lat,lon,G.vlat[v],G.vlon[v]); if (d < bd){ bd = d; best = v; } }
+    }
+    if (best !== null && r >= 1 && bd < (r-0.5)*G.cell*75) break;
+  }
+  return best;
+}
+function inBeaucouze(lat, lon){
+  const ring = G.beau;
+  if (!ring) return km(lat,lon,47.4760,-0.6300) < 2.2;
+  let inside = false;
+  for (let i=0, j=ring.length-1; i<ring.length; j=i++){
+    const [yi,xi] = ring[i], [yj,xj] = ring[j];
+    if ((yi > lat) !== (yj > lat) && lon < (xj-xi)*(lat-yi)/(yj-yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const carLL = () => [G.vlat[S.v], G.vlon[S.v]];
+
+/* ---------- Données : cache + Overpass ---------- */
+function idb(){ return new Promise((res,rej) => { const r = indexedDB.open('taxiAngers', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function kvGet(k){ try { const db = await idb(); return await new Promise(res => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(null); }); } catch(e){ return null; } }
+async function kvSet(k,v){ try { const db = await idb(); db.transaction('kv','readwrite').objectStore('kv').put(v,k); } catch(e){} }
+const CACHE_KEY = 'osm-angers-v2';
+async function loadNetwork(force){
+  G.loadState = 'loading'; renderPanel(); showLoading("Chargement des rues d'Angers (OpenStreetMap)… La première fois, ça peut prendre jusqu'à une minute.");
+  try {
+    let text = null;
+    if (!force){ const c = await kvGet(CACHE_KEY); if (c && c.t && Date.now() - c.t < 30*864e5) text = c.data; }
+    if (!text){
+      let lastErr = null;
+      for (const url of ENDPOINTS){
+        try {
+          const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 150000);
+          const r = await fetch(url, { method:'POST', body:'data=' + encodeURIComponent(QUERY), headers:{'Content-Type':'application/x-www-form-urlencoded'}, signal:ctl.signal });
+          clearTimeout(to);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          text = await r.text(); if (!text.startsWith('{')) throw new Error('réponse invalide');
+          break;
+        } catch(e){ lastErr = e; text = null; }
+      }
+      if (!text) throw lastErr || new Error('aucun serveur');
+      kvSet(CACHE_KEY, { t:Date.now(), data:text });
+    }
+    showLoading("Préparation du réseau routier…");
+    await new Promise(r => setTimeout(r, 30));
+    buildGraph(JSON.parse(text));
+    G.loadState = 'ready';
+    drawStatic();
+  } catch(e){
+    console.error(e); G.loadState = 'error'; G.err = String(e.message || e);
+  }
+  hideLoading(); render();
+}
+function showLoading(t){ const l = $('#loading'); l.textContent = t; l.hidden = false; }
+function hideLoading(){ $('#loading').hidden = true; }
 
 /* ---------- État ---------- */
-const S = { phase:'start', pos:'beaucouze', clock:450, incidents:{}, meteo:METEO[0], V:VEH.diesel, M:MODES.journee };
-
+const S = { phase:'start', clock:450, incidents:{}, meteo:METEO[0], V:VEH.diesel, M:MODES.journee, v:0 };
 function isNight(){ const h = ((S.clock%1440)+1440)%1440; return h >= 1140 || h < 420; }
 function isRush(){ const h = S.clock%1440; return (h>=450 && h<=545) || (h>=1005 && h<=1110); }
-function freeMin(e){ return e.km / (e.v * S.meteo.f) * 60; }
-function edgeMin(e){
-  const inc = S.incidents[e.i];
+function segFree(s){ return s.km / (s.v * S.meteo.f) * 60 + (s.hw.startsWith('motorway') || s.hw.startsWith('trunk') ? 0 : 0.06); }
+function edgeW(e){
+  const si = G.eSeg[e], s = G.segs[si], inc = S.incidents[si];
   if (inc && inc.block) return Infinity;
-  let m = freeMin(e);
-  if (isRush() && e.center) m *= 1.7;
+  let m = segFree(s);
+  if (s.center && isRush()) m *= 1.7;
   if (inc) m *= inc.mult;
   return m;
 }
-function route(from, to, weight = edgeMin){
-  const dist = {}, prev = {}, done = new Set();
-  for (const k in N) dist[k] = Infinity;
-  dist[from] = 0;
-  for (;;){
-    let u = null, best = Infinity;
-    for (const k in dist) if (!done.has(k) && dist[k] < best){ best = dist[k]; u = k; }
-    if (u === null || u === to) break;
-    done.add(u);
-    for (const {e, to:v} of ADJ[u]){
-      const w = weight(e); if (w === Infinity) continue;
-      if (dist[u] + w < dist[v]){ dist[v] = dist[u] + w; prev[v] = {u, e}; }
-    }
+function route(src, dst){
+  if (src === dst) return { min:0, km:0, edges:[], vs:[src], geom:[[G.vlat[src],G.vlon[src]]] };
+  const dist = G.dist, prev = G.prev; dist.fill(Infinity); prev.fill(-1); dist[src] = 0;
+  const hk = [0], hv = [src];
+  const push = (k,v) => { hk.push(k); hv.push(v); let i = hk.length-1; while (i > 0){ const p = (i-1)>>1; if (hk[p] <= hk[i]) break; [hk[p],hk[i]] = [hk[i],hk[p]]; [hv[p],hv[i]] = [hv[i],hv[p]]; i = p; } };
+  const pop = () => { const k = hk[0], v = hv[0], lk = hk.pop(), lv = hv.pop();
+    if (hk.length){ hk[0] = lk; hv[0] = lv; let i = 0; for (;;){ const l = 2*i+1, r = l+1; let m = i;
+      if (l < hk.length && hk[l] < hk[m]) m = l; if (r < hk.length && hk[r] < hk[m]) m = r; if (m === i) break;
+      [hk[m],hk[i]] = [hk[i],hk[m]]; [hv[m],hv[i]] = [hv[i],hv[m]]; i = m; } } return [k,v]; };
+  while (hk.length){
+    const [d,u] = pop(); if (d > dist[u]) continue; if (u === dst) break;
+    for (const e of G.out[u]){ const w = edgeW(e); if (w === Infinity) continue; const v = G.eTo[e], nd = d + w; if (nd < dist[v]){ dist[v] = nd; prev[v] = e; push(nd, v); } }
   }
-  if (dist[to] === Infinity) return null;
-  const path = [to], edges = []; let c = to;
-  while (c !== from){ edges.unshift(prev[c].e); c = prev[c].u; path.unshift(c); }
-  return { time: dist[to], path, edges, km: edges.reduce((s,e)=>s+e.km, 0) };
+  if (dist[dst] === Infinity) return null;
+  const edges = []; let c = dst; while (c !== src){ const e = prev[c]; edges.unshift(e); c = G.eFrom[e]; }
+  return pack(src, edges);
 }
-function connected(){ for (const k in N) if (k!=='ralliement' && !route('ralliement', k)) return false; return true; }
-function energyPct(){ return S.energyU / S.V.cap; }
-function autonomyKm(){ return S.energyU / S.V.cons * 100; }
+function pack(src, edges){
+  const vs = [src], geom = [[G.vlat[src],G.vlon[src]]]; let K = 0, M = 0;
+  for (const e of edges){
+    const s = G.segs[G.eSeg[e]], g = G.eDir[e] === 1 ? s.geom : s.geom.slice().reverse();
+    for (let i=1;i<g.length;i++) geom.push(g[i]);
+    vs.push(G.eTo[e]); K += s.km; M += edgeW(e);
+  }
+  return { min:M, km:K, edges, vs, geom };
+}
+const energyPct = () => S.energyU / S.V.cap;
+const autonomyKm = () => S.energyU / S.V.cons * 100;
 
 /* ---------- Imprévus ---------- */
 function expireIncidents(){ for (const k in S.incidents) if (S.incidents[k].until <= S.clock) delete S.incidents[k]; }
-function spawnIncident(from, to){
-  let cand;
-  if (from){
-    const r = route(from, to); if (!r || !r.edges.length) return null;
-    const k = Math.min(r.edges.length-1, Math.random()<0.5 ? 0 : 1);
-    cand = r.edges[k];
+function spawnIncident(onPath){
+  let cand = null;
+  if (onPath){
+    const r = route(S.v, onPath); if (!r || r.edges.length < 3) return null;
+    const segIds = r.edges.slice(1, -1).map(e => G.eSeg[e]).filter(si => G.segs[si].km > 0.08 && G.segs[si].hw !== 'residential' && !S.incidents[si]);
+    if (!segIds.length) return null; cand = pick(segIds.slice(0, Math.max(1, Math.ceil(segIds.length*0.6))));
   } else {
-    cand = pick(E.filter(e => !e.far && !S.incidents[e.i]));
+    const pool = []; for (let i=0;i<G.segs.length;i++){ const s = G.segs[i]; if (s.major && !s.hw.startsWith('motorway') && s.km > 0.15 && !S.incidents[i]) pool.push(i); }
+    if (!pool.length) return null; cand = pick(pool);
   }
-  if (!cand || cand.far || S.incidents[cand.i]) return null;
   const roll = Math.random(); let inc;
-  if (roll < 0.55) inc = { kind:'bouchon', mult:3, block:false, until:S.clock+rand(35,60) };
+  if (roll < 0.55) inc = { kind:'bouchon', mult:3.5, block:false, until:S.clock+rand(35,60) };
   else if (roll < 0.8) inc = { kind:'accident', mult:1, block:true, until:S.clock+rand(30,50) };
   else inc = { kind:'travaux', mult:1, block:true, until:S.clock+rand(120,240) };
-  S.incidents[cand.i] = inc;
-  if (inc.block && !connected()){ inc.block = false; inc.mult = 2.5; inc.kind = 'bouchon'; }
-  return { e:cand, inc };
+  S.incidents[cand] = inc;
+  if (inc.block && onPath && !route(S.v, onPath)){ inc.block = false; inc.mult = 3; inc.kind = 'bouchon'; }
+  const s = G.segs[cand];
+  return { name: s.name || 'une rue', inc };
 }
 
 /* ---------- Partie ---------- */
@@ -499,95 +605,113 @@ function newGame(mode, veh, voice){
   const M = MODES[mode], V = VEH[veh];
   let w = Math.random()*100, met = METEO[0];
   for (const m of METEO){ if (w < m.w){ met = m; break; } w -= m.w; }
-  Object.assign(S, { mode, M, V, voice, meteo:met, phase:'approach', pos:'beaucouze', clock:M.start,
-    energyU: V.cap*rand(...V.start), fatigue:0, km:0, cash:0, cpam:0, energyCost:0, depannage:0,
-    courses:0, stars:[], points:0, incidents:{}, client:null, leg:null, result:null, showHint:false, lowWarned:false, log:[] });
-  for (let i=0;i<2;i++) spawnIncident();
+  Object.assign(S, { mode, M, V, voice, meteo:met, v:P.beaucouze.v, clock:M.start,
+    energyU: V.cap*rand(...V.start), fatigue:0, km:0, cash:0, cpam:0, energyCost:0, depannage:0, fines:0,
+    courses:0, stars:[], points:0, incidents:{}, client:null, leg:null, result:null, showHint:false, stHint:null, lowWarned:false, passantDone:false });
+  for (let i=0;i<3;i++) spawnIncident();
+  map.setView(carLL(), map.getSize().x < 700 ? 15 : 14);
   nextCourse();
-  centerOn(S.pos, true);
 }
 function genClient(){
-  const pool = S.mode==='nuit' ? ['nuit','nuit','nuit','gare','touriste','long','affaires']
-                               : ['cpam','cpam','cpam','gare','touriste','agee','bebe','fauteuil','affaires','long'];
-  let type = pick(pool);
-  if (type==='long' && Math.random()<0.5) type = pick(pool);
-  const T = TYPES[type];
-  const en = S.M.en || (type==='touriste' ? Math.random()<0.75 : Math.random()<0.2);
-  let fromSet = T.from, toSet = T.to;
-  if (type==='gare' && Math.random()<0.5){ fromSet = RES; toSet = ['gare']; }
-  const ranked = fromSet.map(c => ({c, t: c===S.pos ? 0 : (route(S.pos,c)?.time ?? 999)})).sort((a,b)=>a.t-b.t);
-  const near = ranked.filter(r => r.t <= 16);
-  const from = (near.length ? pick(near) : ranked[0]).c;
-  const to = pick(toSet.filter(x => x !== from));
-  const qKey = (type!=='cpam' && type!=='long' && Math.random()<0.25) ? 'paiement' : type;
-  const bank = QB[qKey][en ? 'en' : 'fr'];
-  const appr = from===S.pos ? 0 : route(S.pos, from).time;
-  const ride = route(from, to);
-  let rdv = null;
-  if (T.cpam){ rdv = Math.ceil((S.clock + appr + 3 + ride.time + rand(8,16)) / 5) * 5; }
-  const est = Math.round((TARIF.pec + ride.km*(isNight()?TARIF.nuit:TARIF.jour)) / 5) * 5;
-  const fill = s => s.replace('{rdv}', rdv!=null ? fmtClock(rdv).replace(':','h') : '').replace('{dest}', N[to].n).replace('{price}', est + ' €');
-  const opts = shuffle(bank.opts.map(o => ({ t:fill(o[0]), ok:!!o[1], fb:o[2], tr:o[3] ? fill(o[3]) : '' })));
-  return { type, label:T.label, cpam:!!T.cpam, en, from, to, rdv, name: pick(en ? NAMES_EN : NAMES_FR),
-    line: fill(bank.line), tr: bank.tr ? fill(bank.tr) : '', opts, answered:null };
+  const night = S.mode === 'nuit';
+  const inB = inBeaucouze(...carLL());
+  const station = inB && Math.random() < 0.55;
+  const pool = night ? ['nuit','nuit','valises','touriste','long','affaires'] : ['cpam','cpam','valises','touriste','agee','bebe','fauteuil','affaires','long'];
+  let prof = pick(pool); if (prof === 'long' && Math.random() < 0.5) prof = pick(pool);
+  if (station && prof === 'cpam') prof = 'agee';
+  const Pf = PROFILES[prof];
+  const en = S.M.en || (prof === 'touriste' ? Math.random() < 0.75 : Math.random() < 0.2);
+  let from, to;
+  const [cla, clo] = carLL();
+  if (station){
+    from = ['beaucouze','atoll'].sort((a,b) => km(cla,clo,...P[a].vll) - km(cla,clo,...P[b].vll))[0];
+    to = pick(Pf.to.filter(k => k !== from && !(P[k] && P[k].beau)));
+  } else {
+    let fromSet = Pf.from, toSet = Pf.to;
+    if (prof === 'valises' && Math.random() < 0.5){ fromSet = ['gare']; toSet = RES; }
+    const near = fromSet.filter(k => km(cla,clo,...P[k].vll) < 6);
+    from = pick(near.length ? near : fromSet);
+    to = pick(toSet.filter(k => k !== from));
+  }
+  const far = FAR[to] || null;
+  const destV = far ? P.a11.v : P[to].v;
+  const appr = route(S.v, P[from].v), ride = route(P[from].v, destV);
+  const farMin = far ? far.km / (110*S.meteo.f) * 60 : 0;
+  const booked = station ? null : ceil5(S.clock + (appr ? appr.min : 10) + rand(6,14));
+  const rdv = Pf.cpam ? ceil5((booked || S.clock) + 3 + (ride ? ride.min : 15) + rand(6,12)) : null;
+  const est = Math.round((TARIF.pec + ((ride ? ride.km : 5) + (far ? far.km : 0))*(isNight()?TARIF.nuit:TARIF.jour)) / 5) * 5;
+  const bank = QB[(!Pf.cpam && prof !== 'long' && Math.random() < 0.25) ? 'paiement' : Pf.q][en ? 'en' : 'fr'];
+  const fill = s => s.replace('{rdv}', rdv != null ? fmtH(rdv) : '').replace('{dest}', placeName(to)).replace('{price}', est + ' €');
+  return { prof, label:Pf.label, cpam:!!Pf.cpam, en, from, to, far, destV, farMin, booked, rdv, station,
+    name: pick(en ? NAMES_EN : NAMES_FR), line: fill(bank.line), tr: bank.tr ? fill(bank.tr) : '',
+    opts: shuffle(bank.opts.map(o => ({ t:fill(o[0]), ok:!!o[1], fb:o[2], tr:o[3] ? fill(o[3]) : '' }))), answered:null, waitLate:0 };
 }
 function nextCourse(){
   if (S.courses >= S.M.max || S.clock >= S.M.end) return endGame();
-  expireIncidents();
-  if (Math.random() < 0.6) spawnIncident();
-  S.client = genClient(); S.result = null; S.showHint = false;
-  if (S.client.from === S.pos){ S.leg = null; arriveAtPickup(); return; }
-  const r = route(S.pos, S.client.from);
-  S.leg = { kind:'approach', target:S.client.from, opt:r.time, min:0, km:0, path:[S.pos], hint:false };
+  expireIncidents(); if (Math.random() < 0.6) spawnIncident();
+  S.client = genClient(); S.result = null; S.showHint = false; S.passantDone = false;
+  const c = S.client;
+  if (P[c.from].v === S.v){ S.leg = null; arriveAtPickup(); return; }
+  const r = route(S.v, P[c.from].v);
+  S.leg = { kind:'approach', target:P[c.from].v, opt:r ? r.min : 0, min:0, km:0, trail:[], hint:false };
   S.phase = 'approach';
-  toast(`Nouvelle course : ${S.client.name} attend à ${N[S.client.from].n}.`, 'ok');
+  toast(c.station ? `Un client se présente à ${P[c.from].n}.` : `Réservation : ${c.name}, ${P[c.from].n} à ${fmtH(c.booked)}.`, 'ok');
   render();
 }
 function arriveAtPickup(){
-  S.phase = 'question'; S.leg = null;
-  render();
-  say(S.client.line, S.client.en);
+  const c = S.client;
+  if (c.booked){
+    if (S.clock < c.booked){ toast(`Tu es en avance : tu attends ton client jusqu'à ${fmtH(c.booked)}.`); S.clock = c.booked; }
+    else c.waitLate = Math.round(S.clock - c.booked);
+  }
+  S.phase = 'question'; S.leg = null; render(); say(c.line, c.en);
 }
-function answer(i){
-  const c = S.client; if (c.answered) return;
-  c.answered = { i, ok: c.opts[i].ok };
-  render();
-}
+function answer(i){ const c = S.client; if (c.answered) return; c.answered = { i, ok:c.opts[i].ok }; render(); }
 function startRide(){
-  const c = S.client, r = route(S.pos, c.to);
-  S.leg = { kind:'ride', target:c.to, opt:r.time, min:0, km:0, path:[S.pos], hint:false };
+  const c = S.client, r = route(S.v, c.destV);
+  S.leg = { kind:'ride', target:c.destV, opt:(r ? r.min : 0) + c.farMin, min:0, km:0, trail:[], hint:false };
   S.meter = TARIF.pec; S.phase = 'ride'; S.showHint = false;
-  if (Math.random() < S.M.incP){ const x = spawnIncident(S.pos, c.to); if (x) toast(`Info trafic : ${INC_LABEL[x.inc.kind]} sur ${x.e.name}.`, 'warn'); }
+  if (Math.random() < S.M.incP){ const x = spawnIncident(c.destV); if (x) toast(`Info trafic : ${INC_LABEL[x.inc.kind]} sur ${x.name}.`, 'warn'); }
   render();
+}
+function highway(dist, paid){
+  const min = dist / (110*S.meteo.f) * 60, need = dist * S.V.cons / 100;
+  S.clock += min; S.km += dist; S.fatigue = Math.min(100, S.fatigue + min*0.11*S.M.fat);
+  if (S.energyU < need + S.V.cap*0.03){ const add = S.V.cap*0.6, cost = add*S.V.price*1.15; S.energyU += add; S.energyCost += cost; S.clock += 10; toast(`Arrêt sur une aire d'autoroute pour ${S.V.kind==='elec'?'recharger':'faire le plein'} : ${eur(cost)}.`, 'warn'); }
+  S.energyU -= need;
+  if (paid){ S.meter += dist * (isNight() ? TARIF.nuit : TARIF.jour); S.leg.min += min; S.leg.km += dist; }
+  return min;
 }
 function finishRide(){
-  const L = S.leg, c = S.client;
-  const ratio = L.min / Math.max(1, L.opt);
-  const price = Math.max(TARIF.mini, S.meter);
+  const c = S.client;
+  let backNote = null;
+  if (c.far){ highway(c.far.km, true); }
+  const L = S.leg, ratio = L.min / Math.max(1, L.opt), price = Math.max(TARIF.mini, S.meter);
   let s = 5; const notes = [];
   if (!c.answered.ok){ s--; notes.push("Réponse au client à revoir"); }
   if (ratio > 1.25){ s--; notes.push(`Trajet plus long que le chemin conseillé (${Math.round(L.min)} min au lieu de ${Math.round(L.opt)})`); }
   if (ratio > 1.6) s--;
-  if (ratio <= 1.05) notes.push("Itinéraire optimal, bravo");
-  let late = null;
-  if (c.cpam){ late = Math.round(S.clock - c.rdv);
+  if (ratio <= 1.08) notes.push("Itinéraire optimal, bravo");
+  if (c.waitLate > 0){ s -= c.waitLate > 10 ? 2 : 1; notes.push(`Client attendu avec ${c.waitLate} min de retard à la prise en charge`); }
+  if (c.cpam){ const late = Math.round(S.clock - c.rdv);
     if (late > 0){ s -= late > 10 ? 2 : 1; notes.push(`Arrivée avec ${late} min de retard au rendez-vous`); }
-    else notes.push(`À l'heure, ${-late} min d'avance`); }
+    else notes.push(`À l'heure au rendez-vous, ${-late} min d'avance`); }
   if (S.fatigue >= 90){ s--; notes.push("Trop fatiguée : pense aux pauses"); }
   s = Math.max(1, Math.min(5, s));
-  const pts = s*20 + (ratio<=1.05 ? 20 : ratio<=1.25 ? 10 : 0) + (c.answered.ok ? 10 : 0) - (L.hint && !S.M.hint ? 10 : 0);
+  const pts = s*20 + (ratio<=1.08 ? 20 : ratio<=1.25 ? 10 : 0) + (c.answered.ok ? 10 : 0) - (L.hint && !S.M.hint ? 10 : 0);
   if (c.cpam) S.cpam += price; else S.cash += price;
   S.courses++; S.stars.push(s); S.points += pts; S.fatigue = Math.min(100, S.fatigue + 4);
+  if (c.far){ const m = highway(c.far.km, false); backNote = `Retour à vide depuis ${c.far.n} : ${c.far.km} km, ${Math.round(m)} min non payées`; notes.push(backNote); }
   S.result = { ok:true, stars:s, price, pts, notes, cpam:c.cpam, min:L.min, opt:L.opt, km:L.km, client:c };
   S.leg = null; S.phase = 'done';
   toast(`Course terminée : ${eur(price)}`, 'ok');
   say(c.en ? "Thank you, goodbye!" : "Merci, au revoir !", c.en);
 }
-function panne(e){
-  const aboard = S.phase === 'ride' || S.phase === 'approach';
+function panne(where){
+  const aboard = (S.phase === 'ride' || S.phase === 'approach') && S.client;
   S.clock += 45; S.depannage += 90; S.energyU = S.V.cap * 0.15; S.fatigue = Math.min(100, S.fatigue + 5);
-  toast(`Panne ${S.V.kind==='elec' ? 'de batterie' : 'sèche'} sur ${e.name} ! Dépannage : 45 min et 90 €.`, 'bad');
-  if (aboard && S.client){
+  toast(`Panne ${S.V.kind==='elec' ? 'de batterie' : 'sèche'}${where ? ' sur ' + where : ''} ! Dépannage : 45 min et 90 €.`, 'bad');
+  if (aboard){
     S.courses++; S.stars.push(1);
     S.result = { ok:false, stars:1, price:0, pts:0, notes:[S.phase==='ride' ? "Course perdue : le client a dû appeler un autre taxi" : "Le client a annulé la course", "Surveille la jauge et fais le plein avant 20 %"], client:S.client };
     S.leg = null; S.phase = 'done';
@@ -602,204 +726,206 @@ function endGame(){
   render();
 }
 
-/* ---------- Déplacement ---------- */
-function canDrive(){ return ['approach','ride','done'].includes(S.phase); }
-function tryMove(to){
+/* ---------- Conduite ---------- */
+const canDrive = () => G.ready && ['approach','ride','done'].includes(S.phase);
+function onMapTap(latlng){
   if (S.anim || !canDrive()) return;
-  if (to === S.pos) return;
-  const link = ADJ[S.pos].find(a => a.to === to);
-  if (!link){ toast("Choisis un point jaune : un carrefour relié directement au taxi."); return; }
-  const e = link.e, t = edgeMin(e);
-  if (t === Infinity){ toast(`${e.name} : ${INC_LABEL[S.incidents[e.i].kind]}. Trouve un autre chemin.`, 'bad'); return; }
-  const need = e.km * S.V.cons / 100;
-  if (S.energyU < need) return panne(e);
-  const ms = reduced ? 0 : Math.max(320, Math.min(e.far ? 1800 : 1300, t*90));
-  animateCar(S.pos, to, ms, () => afterMove(e, to, t, need));
+  const { lat, lng } = latlng;
+  let v = null, bp = 0.12;
+  for (const k in P){ const d = km(lat,lng,...P[k].vll); if (d < bp){ bp = d; v = P[k].v; } }
+  if (v === null){ let bs = 0.06; for (const st of G.stations){ const d = km(lat,lng,st.lat,st.lon); if (d < bs){ bs = d; v = st.v; } } }
+  if (v === null) v = nearest(lat, lng, 0.25);
+  if (v === null){ toast("Touche une rue (zoome si besoin)."); return; }
+  if (v === S.v) return;
+  const d = km(...carLL(), G.vlat[v], G.vlon[v]);
+  if (d > S.M.hop){ toast(`Trop loin : choisis une rue dans le cercle jaune (${dec(S.M.hop)} km autour du taxi).`); return; }
+  let r = route(S.v, v);
+  if (!r){ toast("Impossible d'y aller : sens interdit ou route fermée.", 'bad'); return; }
+  if (S.leg){ const idx = r.vs.indexOf(S.leg.target); if (idx > 0 && idx < r.vs.length-1) r = pack(S.v, r.edges.slice(0, idx)); }
+  const need = r.km * S.V.cons / 100;
+  if (S.energyU < need){ const s = G.segs[G.eSeg[r.edges[0]]]; return panne(s && s.name); }
+  drive(r, need);
 }
-function afterMove(e, to, t, need){
-  S.clock += t; S.km += e.km; S.energyU = Math.max(0, S.energyU - need);
-  S.fatigue = Math.min(100, S.fatigue + t * 0.11 * S.M.fat);
-  if (S.phase === 'ride'){
-    S.meter += e.km * (isNight() ? TARIF.nuit : TARIF.jour);
-    S.meter += Math.max(0, t - freeMin(e)) * TARIF.attenteMin;
+function drive(r, need){
+  const ms = reduced ? 0 : Math.max(350, Math.min(3200, r.km * 420));
+  S.anim = true; renderMap(r.geom);
+  const cum = [0]; for (let i=1;i<r.geom.length;i++) cum.push(cum[i-1] + km(...r.geom[i-1], ...r.geom[i]));
+  const total = cum[cum.length-1] || 1, t0 = performance.now();
+  const finish = () => { S.anim = false; afterHop(r, need); };
+  if (!ms){ finish(); return; }
+  let seg = 1;
+  function step(now){
+    const k = Math.min(1, (now - t0)/ms), q = k<0.5 ? 2*k*k : 1 - Math.pow(-2*k+2,2)/2, d = q*total;
+    while (seg < cum.length-1 && cum[seg] < d) seg++;
+    const a = r.geom[seg-1], b = r.geom[seg], f = cum[seg] > cum[seg-1] ? (d - cum[seg-1])/(cum[seg]-cum[seg-1]) : 1;
+    car.setLatLng([a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f]);
+    if (k < 1) requestAnimationFrame(step); else finish();
   }
-  if (S.leg){ S.leg.min += t; S.leg.km += e.km; S.leg.path.push(to); }
-  S.pos = to;
+  requestAnimationFrame(step);
+}
+function afterHop(r, need){
+  S.clock += r.min; S.km += r.km; S.energyU = Math.max(0, S.energyU - need);
+  S.fatigue = Math.min(100, S.fatigue + r.min * 0.11 * S.M.fat);
+  if (S.phase === 'ride'){
+    for (const e of r.edges){ const s = G.segs[G.eSeg[e]];
+      S.meter += s.km * (isNight() ? TARIF.nuit : TARIF.jour) + Math.max(0, edgeW(e) - segFree(s)) * TARIF.attenteMin; }
+  }
+  if (S.leg){ S.leg.min += r.min; S.leg.km += r.km; S.leg.trail.push(r.geom); }
+  S.v = r.vs[r.vs.length-1];
   expireIncidents();
   if (energyPct() < 0.15 && !S.lowWarned){ S.lowWarned = true; toast(`Réserve ! Il te reste environ ${Math.round(autonomyKm())} km d'autonomie.`, 'warn'); }
   if (energyPct() >= 0.15) S.lowWarned = false;
-  if (S.leg && S.pos === S.leg.target){
-    if (S.phase === 'ride') finishRide(); else { followCar(); arriveAtPickup(); return; }
-  } else if (S.leg && Math.random() < S.M.incP * (S.phase === 'ride' ? 1 : 0.5)){
-    const x = spawnIncident(S.pos, S.leg.target);
-    if (x) toast(`Info trafic : ${INC_LABEL[x.inc.kind]} sur ${x.e.name}.`, 'warn');
+  if (S.leg && S.v === S.leg.target){
+    followCar();
+    if (S.phase === 'ride') finishRide(); else { arriveAtPickup(); return; }
+  } else {
+    if (S.leg && Math.random() < S.M.incP * (S.phase === 'ride' ? 1 : 0.5)){
+      const x = spawnIncident(S.leg.target); if (x) toast(`Info trafic : ${INC_LABEL[x.inc.kind]} sur ${x.name}.`, 'warn');
+    }
+    if ((S.phase === 'approach' || S.phase === 'done') && !S.passantDone && !inBeaucouze(...carLL()) && Math.random() < 0.18){
+      S.passantDone = true; S.prevPhase = S.phase;
+      const bank = QB.passant.fr;
+      S.passant = { line:bank.line, opts:shuffle(bank.opts.map(o => ({ t:o[0], ok:!!o[1], fb:o[2] }))), answered:null };
+      S.phase = 'passant';
+    }
   }
   if (S.fatigue >= 100 && S.phase !== 'ride'){ S.clock += 30; S.fatigue = 60; toast("Épuisée : pause forcée de 30 min.", 'bad'); }
-  followCar();
+  followCar(); render();
+}
+function answerPassant(i){
+  const p = S.passant; if (p.answered) return;
+  p.answered = { i, ok:p.opts[i].ok };
+  if (p.opts[i].ok) S.points += 15; else if (/montez/i.test(p.opts[i].t)){ S.fines += 135; S.points -= 20; }
   render();
 }
 
-/* ---------- Actions station ---------- */
+/* ---------- Actions ---------- */
 function stationActions(){
   if (!['approach','done'].includes(S.phase)) return '';
-  const n = N[S.pos], out = [];
-  const pct = energyPct();
-  if (S.V.kind === 'fuel' && n.tags.includes('fuel') && pct < 0.95){
-    const l = S.V.cap - S.energyU;
-    out.push(`<button class="btn" data-act="fuel">Faire le plein · ${eur(l*S.V.price)} · 7 min</button>`);
-  }
-  if (S.V.kind === 'elec' && n.tags.includes('charge') && pct < 0.9){
-    const add = Math.min(S.V.cap*0.9 - S.energyU, 40);
-    out.push(`<button class="btn" data-act="charge">Recharger 30 min · ${eur(add*S.V.price)}</button>`);
-  }
+  const out = [], pct = energyPct(), kind = S.V.kind === 'elec' ? 'charge' : 'fuel', here = stationHere(kind);
+  if (here && kind === 'fuel' && pct < 0.95){ const l = S.V.cap - S.energyU; out.push(`<button class="btn" data-act="fuel">Plein chez ${esc(here.name)} · ${eur(l*S.V.price)} · 7 min</button>`); }
+  if (here && kind === 'charge' && pct < 0.9){ const add = Math.min(S.V.cap*0.9 - S.energyU, 40); out.push(`<button class="btn" data-act="charge">Recharger (${esc(here.name)}) 30 min · ${eur(add*S.V.price)}</button>`); }
+  if (!here) out.push(`<button class="btn" data-act="findst">${S.stHint ? 'Masquer le chemin' : (kind === 'fuel' ? 'Station-service la plus proche' : 'Borne la plus proche')}</button>`);
   if (S.fatigue > 10) out.push(`<button class="btn" data-act="pause">Pause 20 min</button>`);
   if (!out.length) return '';
-  const warn = S.phase === 'approach' ? `<p class="small">Attention : ton client attend pendant ce temps.</p>` : '';
-  return `<div class="btns">${out.join('')}</div>${warn}`;
+  return `<div class="btns">${out.join('')}</div>${S.phase === 'approach' ? '<p class="small">Attention : ton client attend pendant ce temps.</p>' : ''}`;
 }
-function doFuel(){
-  const l = S.V.cap - S.energyU, cost = l*S.V.price;
-  S.energyU = S.V.cap; S.energyCost += cost; S.clock += 7;
-  toast(`Plein fait : ${l.toFixed(1).replace('.',',')} L pour ${eur(cost)}.`, 'ok'); afterAction();
-}
-function doCharge(){
-  const add = Math.min(S.V.cap*0.9 - S.energyU, 40), cost = add*S.V.price;
-  S.energyU += add; S.energyCost += cost; S.clock += 30; S.fatigue = Math.max(0, S.fatigue - 12);
-  toast(`Recharge : +${Math.round(add)} kWh pour ${eur(cost)}.`, 'ok'); afterAction();
-}
-function doPause(){ S.clock += 20; S.fatigue = Math.max(0, S.fatigue - 30); toast("Pause : fatigue en baisse.", 'ok'); afterAction(); }
-function afterAction(){
-  expireIncidents();
-  if (S.leg) S.leg.min += 0; // le temps compte dans l'horloge
-  render();
-}
+function doFuel(){ const l = S.V.cap - S.energyU, cost = l*S.V.price; S.energyU = S.V.cap; S.energyCost += cost; S.clock += 7; S.stHint = null; toast(`Plein fait : ${dec(l)} L pour ${eur(cost)}.`, 'ok'); expireIncidents(); render(); }
+function doCharge(){ const add = Math.min(S.V.cap*0.9 - S.energyU, 40), cost = add*S.V.price; S.energyU += add; S.energyCost += cost; S.clock += 30; S.stHint = null; S.fatigue = Math.max(0, S.fatigue - 12); toast(`Recharge : +${Math.round(add)} kWh pour ${eur(cost)}.`, 'ok'); expireIncidents(); render(); }
+function doPause(){ S.clock += 20; S.fatigue = Math.max(0, S.fatigue - 30); toast("Pause : fatigue en baisse.", 'ok'); expireIncidents(); render(); }
 
-/* ---------- Voix ---------- */
-function say(text, en){
-  if (!S.voice) return;
-  try { const u = new SpeechSynthesisUtterance(text); u.lang = en ? 'en-GB' : 'fr-FR'; u.rate = 0.95;
-    speechSynthesis.cancel(); speechSynthesis.speak(u); } catch(e){}
-}
-
-/* ---------- Toast ---------- */
+/* ---------- Voix et messages ---------- */
+function say(text, en){ if (!S.voice) return; try { const u = new SpeechSynthesisUtterance(text); u.lang = en ? 'en-GB' : 'fr-FR'; u.rate = 0.95; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch(e){} }
 let toastT = null;
-function toast(msg, kind=''){
-  const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + kind; t.hidden = false;
-  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3800);
-}
+function toast(msg, kind=''){ const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + kind; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 4200); }
 
-/* ---------- Carte (Leaflet + plan IGN) ---------- */
+/* ---------- Carte ---------- */
 const IGN_URL = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png';
 const OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const map = L.map('map', { zoomControl:false, minZoom:10, maxZoom:18 }).setView([47.472, -0.56], 13);
-const ign = L.tileLayer(IGN_URL, { maxZoom:18, attribution:'Plan IGN © <a href="https://www.ign.fr" target="_blank" rel="noopener">IGN</a>' }).addTo(map);
+const map = L.map('map', { zoomControl:false, minZoom:11, maxZoom:18 }).setView([47.474, -0.585], 13);
+const ign = L.tileLayer(IGN_URL, { maxZoom:18, attribution:'Plan IGN © <a href="https://www.ign.fr" target="_blank" rel="noopener">IGN</a> · Rues © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }).addTo(map);
 const osm = L.tileLayer(OSM_URL, { maxZoom:18, attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' });
 L.control.layers({ 'Plan IGN':ign, 'OpenStreetMap':osm }, null, { position:'bottomright' }).addTo(map);
 L.control.zoom({ position:'topright' }).addTo(map);
 L.control.scale({ imperial:false, position:'bottomleft' }).addTo(map);
-
-const gRoads = L.layerGroup().addTo(map);
-const gTrail = L.layerGroup().addTo(map);
-const gNodes = L.layerGroup().addTo(map);
-const gRings = L.layerGroup().addTo(map);
-const ll = k => N[k].ll;
+const canvas = L.canvas({ padding:0.3 });
+const gBeau = L.layerGroup().addTo(map), gOneway = L.layerGroup().addTo(map), gInc = L.layerGroup().addTo(map),
+      gTrail = L.layerGroup().addTo(map), gPlaces = L.layerGroup().addTo(map), gStations = L.layerGroup().addTo(map);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-
-// Routes (dessinées une fois, recolorées à chaque tour)
-const roadLines = E.map(e => {
-  const pl = L.polyline([ll(e.a), ll(e.b)], { weight: e.fast ? 7 : 5, opacity:.55, lineCap:'round', interactive:false }).addTo(gRoads);
-  return pl;
-});
-const incMarkers = {};
-
-// Lieux
-const nodeMarkers = {};
-for (const k in N){
-  const n = N[k];
-  const tags = n.tags.map(t => ({ h:'<span class="sg h">H</span>', taxi:'<span class="sg h">TAXI</span>', fuel:'<span class="sg">STATION</span>', charge:'<span class="sg">BORNE</span>' }[t])).join('');
-  const m = L.circleMarker(n.ll, { radius: n.t==='x' ? 6 : 8, weight:3, fillOpacity:1 }).addTo(gNodes);
-  const dir = { r:'right', l:'left', t:'top', b:'bottom' }[n.lp] || 'right';
-  const lbl = n.t === 'f' ? `${n.n} · ${E.find(e=>e.b===k).km} km` : n.n;
-  m.bindTooltip(`${esc(lbl)}${tags ? ' ' + tags : ''}`, { permanent: n.t !== 'x', direction:dir, offset: dir==='left' ? [-8,0] : dir==='right' ? [8,0] : [0, dir==='top' ? -8 : 8], className: 'lbl' + (n.t==='x' ? ' x' : '') });
-  m.on('click', () => tryMove(k));
-  nodeMarkers[k] = m;
-}
-
-// Taxi
-const carIcon = busy => L.divIcon({ className:'', iconSize:[40,26], iconAnchor:[20,15],
-  html:`<div class="car"><i class="${busy ? 'busy' : ''}"></i><b>TAXI</b></div>` });
-const car = L.marker(ll('beaucouze'), { icon:carIcon(false), interactive:false, zIndexOffset:1000, keyboard:false }).addTo(map);
+const hopCircle = L.circle([47.47,-0.6], { radius:1500, interactive:false, fill:true, fillOpacity:0.06, weight:2, dashArray:'6 6' });
+const carIcon = busy => L.divIcon({ className:'', iconSize:[40,26], iconAnchor:[20,15], html:`<div class="car"><i class="${busy ? 'busy' : ''}"></i><b>TAXI</b></div>` });
+const car = L.marker([47.4744,-0.6335], { icon:carIcon(false), interactive:false, zIndexOffset:1000, keyboard:false });
 let carBusy = null;
+const placeMarkers = {};
+map.on('click', e => onMapTap(e.latlng));
+map.on('zoomend', () => { $('#map').classList.toggle('zlow', map.getZoom() < 13); drawOneways(); });
+map.on('moveend', drawOneways);
 
-function centerOn(k, initial){
-  if (initial) map.setView(ll(k), map.getSize().x < 700 ? 14 : 13);
-  else map.panTo(ll(k));
-}
-function followCar(){
-  const p = L.latLng(ll(S.pos));
-  if (!map.getBounds().pad(-0.18).contains(p)) map.panTo(p);
-}
-function renderMap(){
-  const accent = css('--accent'), bad = css('--bad'), ink = css('--ink'), road = css('--maproad'), fast = css('--mapfast'), muted = css('--muted');
-  // routes et imprévus
-  for (const e of E){
-    const pl = roadLines[e.i], inc = S.incidents[e.i];
-    let style = { color: e.fast ? fast : road, opacity:.6, dashArray:null, weight: e.fast ? 7 : 5 };
-    if (e.far) style = { color: muted, opacity:.7, dashArray:'8 8', weight:4 };
-    if (inc) style = inc.block ? { color: ink, opacity:.95, dashArray:'6 8', weight:7 } : { color: bad, opacity:.9, dashArray:null, weight:8 };
-    pl.setStyle(style);
-    if (inc && !incMarkers[e.i]){
-      const mid = [(ll(e.a)[0]+ll(e.b)[0])/2, (ll(e.a)[1]+ll(e.b)[1])/2];
-      incMarkers[e.i] = L.marker(mid, { interactive:true, keyboard:false, icon: L.divIcon({ className:'', iconSize:[24,24], iconAnchor:[12,12], html:`<div class="incb${inc.block?' block':''}">${inc.block?'×':'!'}</div>` }) })
-        .bindTooltip(`${esc(e.name)} : ${INC_LABEL[inc.kind]}`).addTo(gRoads);
-    } else if (!inc && incMarkers[e.i]){ gRoads.removeLayer(incMarkers[e.i]); delete incMarkers[e.i]; }
+function drawStatic(){
+  if (G.beau){
+    L.polygon(G.beau, { color:css('--ok'), weight:2, dashArray:'8 6', fillColor:css('--ok'), fillOpacity:0.07, interactive:false }).addTo(gBeau)
+      .bindTooltip("Beaucouzé : prise en charge libre", { sticky:true });
   }
-  // chemin conseillé + trajet parcouru
+  for (const k in P){
+    const p = P[k];
+    const tags = p.tags.map(t => ({ h:'<span class="sg h">H</span>', taxi:'<span class="sg h">TAXI</span>', fuel:'<span class="sg">STATION</span>', charge:'<span class="sg">BORNE</span>', a11:'<span class="sg">A11</span>' }[t] || '')).join('');
+    const m = L.circleMarker(p.vll, { radius:7, weight:3, fillOpacity:1, interactive:false }).addTo(gPlaces);
+    m.bindTooltip(`${esc(p.n)}${tags ? ' ' + tags : ''}`, { permanent:true, direction:'right', offset:[8,0], className:'lbl' });
+    placeMarkers[k] = m;
+  }
+  for (const st of G.stations){
+    const ic = st.kind === 'fuel'
+      ? '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M3 1h6v6H3zM2 8h8v7H2zM11 4l2 2v6a1 1 0 0 0 2 0V6l-2-3"/></svg>'
+      : '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M9 0 3 9h4l-1 7 6-9H8z"/></svg>';
+    L.marker([st.lat, st.lon], { interactive:false, keyboard:false, icon:L.divIcon({ className:'', iconSize:[20,20], iconAnchor:[10,10], html:`<div class="stn ${st.kind}" title="${esc(st.name)}">${ic}</div>` }) }).addTo(gStations);
+  }
+  car.setLatLng(P.beaucouze.vll).addTo(map);
+  hopCircle.addTo(map);
+  $('#map').classList.toggle('zlow', map.getZoom() < 13);
+  drawOneways();
+}
+function drawOneways(){
+  gOneway.clearLayers();
+  if (!G.ready || map.getZoom() < 15) return;
+  const b = map.getBounds().pad(0.1), col = css('--oneway'), size = 7 * Math.pow(2, 18 - map.getZoom()) / 1000;
+  let n = 0;
+  for (const s of G.segs){
+    if (!s.ow || !b.contains(s.mid)) continue;
+    if (++n > 2500) break;
+    L.polyline(s.geom, { renderer:canvas, color:col, weight:3, opacity:.55, interactive:false }).addTo(gOneway);
+    const g = s.ow === 1 ? s.geom : s.geom.slice().reverse();
+    let i = Math.max(1, Math.floor(g.length/2)); const a = g[i-1], c = g[i];
+    const m = [(a[0]+c[0])/2, (a[1]+c[1])/2], cl = Math.cos(m[0]*Math.PI/180);
+    let dx = (c[1]-a[1])*cl*111.32, dy = (c[0]-a[0])*110.57; const L2 = Math.hypot(dx,dy) || 1; dx /= L2; dy /= L2;
+    const pt = (fx, fy) => [m[0] + fy/110.57, m[1] + fx/(111.32*cl)];
+    const tip = pt(dx*size, dy*size), w1 = pt(-dx*size - dy*size*0.8, -dy*size + dx*size*0.8), w2 = pt(-dx*size + dy*size*0.8, -dy*size - dx*size*0.8);
+    L.polyline([w1, tip, w2], { renderer:canvas, color:col, weight:3, opacity:.95, interactive:false }).addTo(gOneway);
+  }
+}
+function followCar(){ const p = L.latLng(carLL()); if (!map.getBounds().pad(-0.18).contains(p)) map.panTo(p); }
+function renderMap(planned){
+  if (!G.ready) return;
+  const accent = css('--accent'), bad = css('--bad'), ink = css('--ink');
+  gInc.clearLayers();
+  for (const si in S.incidents){
+    const inc = S.incidents[si], s = G.segs[si];
+    L.polyline(s.geom, inc.block ? { color:ink, weight:8, dashArray:'6 8', opacity:.95 } : { color:bad, weight:9, opacity:.85 })
+      .bindTooltip(`${esc(s.name || 'Rue')} : ${INC_LABEL[inc.kind]}`).addTo(gInc);
+    L.marker(s.mid, { keyboard:false, interactive:false, icon:L.divIcon({ className:'', iconSize:[24,24], iconAnchor:[12,12], html:`<div class="incb${inc.block?' block':''}">${inc.block?'×':'!'}</div>` }) }).addTo(gInc);
+  }
   gTrail.clearLayers();
   const target = S.leg ? S.leg.target : null;
-  if (target && (S.M.hint || S.showHint) && !S.anim){
-    const r = route(S.pos, target);
-    if (r) L.polyline(r.path.map(ll), { color:accent, weight:5, dashArray:'2 10', lineCap:'round', interactive:false }).addTo(gTrail);
+  if (target !== null && (S.M.hint || S.showHint) && !S.anim){
+    const r = route(S.v, target);
+    if (r) L.polyline(r.geom, { color:accent, weight:5, dashArray:'2 10', lineCap:'round', interactive:false }).addTo(gTrail);
   }
-  if (S.leg && S.leg.path.length > 1) L.polyline(S.leg.path.map(ll), { color:accent, weight:6, opacity:.95, interactive:false }).addTo(gTrail);
-  // lieux
-  const neigh = new Set(canDrive() && !S.anim ? ADJ[S.pos].filter(a => edgeMin(a.e) !== Infinity).map(a => a.to) : []);
+  if (S.stHint && !S.anim){ const r = route(S.v, S.stHint.v); if (r) L.polyline(r.geom, { color:css('--oneway'), weight:5, dashArray:'2 10', lineCap:'round', interactive:false }).addTo(gTrail); }
+  if (S.leg) for (const g of S.leg.trail) L.polyline(g, { color:accent, weight:6, opacity:.95, interactive:false }).addTo(gTrail);
+  if (planned) L.polyline(planned, { color:accent, weight:6, opacity:.6, interactive:false }).addTo(gTrail);
   const from = S.client && S.phase === 'approach' ? S.client.from : null;
-  const to = S.client && ['approach','question','ride'].includes(S.phase) ? S.client.to : null;
-  for (const k in N){
-    const m = nodeMarkers[k], n = N[k];
-    let st = { color: ink, fillColor: css('--surface'), radius: n.t==='x' ? 6 : 8, weight:3 };
-    if (neigh.has(k)) st = { color: accent, fillColor: accent, radius: 11, weight:4 };
-    if (k === from) st = { color: css('--ok'), fillColor: css('--ok'), radius: 12, weight:4 };
-    if (k === to) st = { color: bad, fillColor: bad, radius: 12, weight:4 };
-    m.setStyle(st); m.setRadius(st.radius);
-    const el = m.getElement(); if (el) el.classList.toggle('pulse', neigh.has(k) && !reduced);
+  const to = S.client && ['approach','question','ride'].includes(S.phase) ? (S.client.far ? 'a11' : S.client.to) : null;
+  for (const k in placeMarkers){
+    let st = { color:ink, fillColor:css('--surface'), radius:7 };
+    if (k === from) st = { color:css('--ok'), fillColor:css('--ok'), radius:12 };
+    if (k === to) st = { color:bad, fillColor:bad, radius:12 };
+    placeMarkers[k].setStyle(st); placeMarkers[k].setRadius(st.radius);
   }
-  // taxi
+  const showHop = canDrive() && !S.anim;
+  hopCircle.setLatLng(carLL()).setRadius(S.M.hop*1000).setStyle({ color:accent, fillColor:accent, opacity: showHop ? .9 : 0, fillOpacity: showHop ? .06 : 0 });
   const busy = S.phase === 'ride' || S.phase === 'question';
-  if (!S.anim) car.setLatLng(ll(S.pos));
+  if (!S.anim) car.setLatLng(carLL());
   if (busy !== carBusy){ car.setIcon(carIcon(busy)); carBusy = busy; }
 }
-function animateCar(from, to, ms, done){
-  if (!ms){ done(); return; }
-  S.anim = true; renderMap();
-  const a = ll(from), b = ll(to), t0 = performance.now();
-  function step(now){
-    const k = Math.min(1, (now - t0) / ms), q = k<0.5 ? 2*k*k : 1 - Math.pow(-2*k+2,2)/2;
-    car.setLatLng([a[0]+(b[0]-a[0])*q, a[1]+(b[1]-a[1])*q]);
-    if (k < 1) requestAnimationFrame(step); else { S.anim = false; done(); }
-  }
-  requestAnimationFrame(step);
-}
-$('#zcar').onclick = () => centerOn(S.pos);
+$('#zcar').onclick = () => { if (G.ready) map.panTo(carLL()); };
 window.addEventListener('resize', () => map.invalidateSize());
 
 /* ---------- Bandeau ---------- */
 function renderHud(){
-  const started = S.phase !== 'start';
+  const started = !['start'].includes(S.phase);
   $('#hTime').textContent = started ? fmtClock(S.clock) : '--:--';
   $('#hMeteo').textContent = started ? S.meteo.n : '—';
   $('#hTarif').textContent = started ? (isNight() ? 'Nuit' : 'Jour') + (isRush() ? ' · pointe' : '') : '—';
+  $('#hZone').textContent = started && G.ready ? (inBeaucouze(...carLL()) ? 'Beaucouzé' : 'Hors commune') : '—';
   $('#hCash').textContent = eur(started ? S.cash + S.cpam : 0);
   $('#hCourses').textContent = started ? (S.M.max < 100 ? `${S.courses} / ${S.M.max}` : String(S.courses)) : '0';
   const busy = S.phase === 'ride' || S.phase === 'question';
@@ -816,53 +942,50 @@ function renderHud(){
 /* ---------- Panneau ---------- */
 const panel = $('#panel');
 const starsHTML = n => `<span class="stars" aria-label="${n} étoiles sur 5">${'★'.repeat(n)}<span class="off">${'★'.repeat(5-n)}</span></span>`;
-function tripHTML(c){
-  return `<dl class="trip"><dt><span class="pin from"></span>Départ</dt><dd>${esc(N[c.from].n)}</dd><dt><span class="pin to"></span>Arrivée</dt><dd>${esc(N[c.to].n)}</dd></dl>`;
+const tripHTML = c => `<dl class="trip"><dt><span class="pin from"></span>Départ</dt><dd>${esc(P[c.from].n)}${c.booked ? ` · à ${fmtH(c.booked)}` : ''}</dd><dt><span class="pin to"></span>Arrivée</dt><dd>${esc(placeName(c.to))}${c.far ? ` · ${c.far.km} km par l'A11` : ''}</dd></dl>`;
+function timeHTML(c){
+  let h = '';
+  if (c.booked && S.phase === 'approach'){ const left = Math.round(c.booked - S.clock); h += `<div class="rdv${left < 0 ? ' late' : ''}">Prise en charge réservée à ${fmtClock(c.booked)} · ${left >= 0 ? `il reste ${left} min` : `retard de ${-left} min`}</div>`; }
+  if (c.rdv){ const left = Math.round(c.rdv - S.clock); h += `<div class="rdv${left < 0 ? ' late' : ''}">Rendez-vous médical à ${fmtClock(c.rdv)} · ${left >= 0 ? `il reste ${left} min` : `retard de ${-left} min`}</div>`; }
+  return h;
 }
-function rdvHTML(c){
-  if (!c.rdv) return '';
-  const left = Math.round(c.rdv - S.clock);
-  return `<div class="rdv${left < 0 ? ' late' : ''}">Rendez-vous à ${fmtClock(c.rdv)} · ${left >= 0 ? `il reste ${left} min` : `retard de ${-left} min`}</div>`;
-}
-function legHTML(){
-  const L = S.leg; if (!L) return '';
-  return `<div class="legstats"><span>Chemin conseillé : <b>${Math.round(L.opt)} min</b></span><span>Ton temps : <b>${Math.round(L.min)} min</b></span><span>Distance : <b>${L.km.toFixed(1).replace('.',',')} km</b></span></div>`;
-}
-function hintBtn(){
-  if (S.M.hint) return '';
-  return `<button class="btn" data-act="hint">${S.showHint ? "Masquer l'itinéraire" : "Itinéraire conseillé (−10 pts)"}</button>`;
-}
+function legHTML(){ const L = S.leg; if (!L) return ''; return `<div class="legstats"><span>Chemin conseillé : <b>${Math.round(L.opt)} min</b></span><span>Ton temps : <b>${Math.round(L.min)} min</b></span><span>Distance : <b>${dec(L.km)} km</b></span></div>`; }
+const hintBtn = () => S.M.hint ? '' : `<button class="btn" data-act="hint">${S.showHint ? "Masquer l'itinéraire" : "Itinéraire conseillé (−10 pts)"}</button>`;
+const HOWTO = `Touche une rue dans le cercle jaune : le taxi y va par le chemin le plus court, en respectant les sens uniques. Zoome pour voir les flèches des sens uniques.`;
 function renderPanel(){
   let h = '';
   if (S.phase === 'start'){
     const best = +(store.get('taxiAngers.best') || 0);
-    h = `<div class="kicker">Simulateur de courses</div>
+    const st = G.loadState;
+    h = `<div class="kicker">Simulateur de courses · licence Beaucouzé</div>
       <h1 class="title">Taxi Angers</h1>
-      <p class="lede">Prends tes clients, trouve le chemin le plus rapide, évite les bouchons, pense au plein et à tes pauses.</p>
+      <p class="lede">Ton taxi est rattaché à Beaucouzé : tu y prends les clients librement. Partout ailleurs, seulement sur réservation.</p>
       <fieldset><legend>Mode de jeu</legend><div class="choices">
         ${Object.entries(MODES).map(([k,m],i)=>`<div class="choice"><input type="radio" name="mode" id="m-${k}" value="${k}" ${i===0?'checked':''}><label for="m-${k}"><b>${m.label}</b><span>${m.desc}</span></label></div>`).join('')}
       </div></fieldset>
       <fieldset><legend>Véhicule</legend><div class="choices">
-        ${Object.entries(VEH).map(([k,v],i)=>`<div class="choice"><input type="radio" name="veh" id="v-${k}" value="${k}" ${i===0?'checked':''}><label for="v-${k}"><b>${v.label}</b><span>${String(v.cons).replace('.',',')} ${v.unit}/100 km · ${v.kind==='elec'?'bornes':'stations'}</span></label></div>`).join('')}
+        ${Object.entries(VEH).map(([k,v],i)=>`<div class="choice"><input type="radio" name="veh" id="v-${k}" value="${k}" ${i===0?'checked':''}><label for="v-${k}"><b>${v.label}</b><span>${dec(v.cons)} ${v.unit}/100 km · ${v.kind==='elec'?'bornes':'stations'}</span></label></div>`).join('')}
       </div></fieldset>
       <label class="check"><input type="checkbox" id="optVoice" checked> Lire les clients à voix haute</label>
-      <button class="btn primary" data-act="go">Prendre le service</button>
-      <p class="small">Comment jouer : touche un point jaune sur la carte pour avancer d'un carrefour. Le point vert, c'est le client, le rouge, sa destination.</p>
+      ${st === 'ready' ? `<button class="btn primary" data-act="go">Prendre le service</button>`
+        : st === 'error' ? `<div class="feedback no">Les rues n'ont pas pu être chargées (${esc(G.err || '')}). Les serveurs OpenStreetMap sont peut-être occupés.</div><button class="btn primary" data-act="reload">Réessayer</button>`
+        : `<button class="btn primary" disabled>Chargement des rues…</button>`}
+      <p class="small">${HOWTO}</p>
+      ${st === 'ready' ? `<p class="small">${G.stations.filter(x=>x.kind==='fuel').length} stations-service et ${G.stations.filter(x=>x.kind==='charge').length} bornes de recharge sur la carte (OpenStreetMap).</p>` : ''}
       ${best ? `<p class="small">Meilleur score : ${best} points</p>` : ''}`;
   }
   else if (S.phase === 'approach'){
     const c = S.client;
-    h = `<div class="kicker">Nouvelle course · ${esc(c.label)}${c.en ? ' · anglais' : ''}</div>
-      <h2>${esc(c.name)} t'attend à ${esc(N[c.from].n)}</h2>
-      ${tripHTML(c)}${rdvHTML(c)}
-      <p class="howto">Rejoins le point vert. Touche les points jaunes autour du taxi, un carrefour à la fois. Le compteur ne tourne pas encore.</p>
-      ${legHTML()}
-      <div class="btns">${hintBtn()}</div>
-      ${stationActions()}`;
+    h = `<div class="kicker">${c.station ? 'Client à la station' : 'Réservation'} · ${esc(c.label)}${c.en ? ' · anglais' : ''}</div>
+      <h2>${esc(c.name)} t'attend à ${esc(P[c.from].n)}</h2>
+      ${tripHTML(c)}${timeHTML(c)}
+      <p class="howto">Rejoins le point vert. ${HOWTO} Le compteur ne tourne pas encore.</p>
+      ${legHTML()}<div class="btns">${hintBtn()}</div>${stationActions()}`;
   }
   else if (S.phase === 'question'){
     const c = S.client, a = c.answered;
-    h = `<div class="kicker">Prise en charge · ${esc(N[c.from].n)}</div>
+    h = `<div class="kicker">Prise en charge · ${esc(P[c.from].n)}</div>
+      ${c.waitLate > 0 ? `<div class="rdv late">Tu arrives avec ${c.waitLate} min de retard sur la réservation.</div>` : ''}
       <div class="speech" ${c.en ? 'lang="en"' : ''}>
         <span class="who">${esc(c.name)} · ${esc(c.label)}</span>
         <q>${esc(c.line)}</q>
@@ -870,49 +993,56 @@ function renderPanel(){
         ${c.en ? `<details><summary>Voir la traduction</summary><p lang="fr">${esc(c.tr)}</p></details>` : ''}
       </div>
       <p><b>Que réponds-tu ?</b></p>
-      <div class="opts">${c.opts.map((o,i)=>{
-        let cls = 'opt'; if (a){ if (o.ok) cls += ' good'; else if (a.i===i) cls += ' wrong'; }
-        return `<button class="${cls}" data-act="ans" data-i="${i}" ${a?'disabled':''} ${c.en?'lang="en"':''}>${esc(o.t)}${a && c.en && o.tr ? `<small lang="fr">${esc(o.tr)}</small>` : ''}</button>`;
-      }).join('')}</div>
+      <div class="opts">${c.opts.map((o,i)=>{ let cls = 'opt'; if (a){ if (o.ok) cls += ' good'; else if (a.i===i) cls += ' wrong'; }
+        return `<button class="${cls}" data-act="ans" data-i="${i}" ${a?'disabled':''} ${c.en?'lang="en"':''}>${esc(o.t)}${a && c.en && o.tr ? `<small lang="fr">${esc(o.tr)}</small>` : ''}</button>`; }).join('')}</div>
       ${a ? `<div class="feedback${a.ok?'':' no'}">${a.ok ? 'Bonne réponse. ' : 'Pas idéal. '}${esc(c.opts[a.i].fb)}</div>
-        <button class="btn primary" data-act="ride">Démarrer la course vers ${esc(N[c.to].n)}</button>` : ''}`;
+        <button class="btn primary" data-act="ride">Démarrer la course vers ${esc(placeName(c.to))}</button>` : ''}`;
+  }
+  else if (S.phase === 'passant'){
+    const p = S.passant, a = p.answered;
+    h = `<div class="kicker">Hors de Beaucouzé · sans réservation</div>
+      <div class="speech"><span class="who">Un passant te fait signe</span><q>${esc(p.line)}</q></div>
+      <p><b>Que fais-tu ?</b></p>
+      <div class="opts">${p.opts.map((o,i)=>{ let cls = 'opt'; if (a){ if (o.ok) cls += ' good'; else if (a.i===i) cls += ' wrong'; }
+        return `<button class="${cls}" data-act="pas" data-i="${i}" ${a?'disabled':''}>${esc(o.t)}</button>`; }).join('')}</div>
+      ${a ? `<div class="feedback${a.ok?'':' no'}">${esc(p.opts[a.i].fb)}${!a.ok && /montez/i.test(p.opts[a.i].t) ? ' Amende : 135 €.' : ''}</div>
+        <button class="btn primary" data-act="pasok">Continuer</button>` : ''}`;
   }
   else if (S.phase === 'ride'){
     const c = S.client;
     h = `<div class="kicker">En course · ${esc(c.label)}</div>
       <div class="meter"><span class="amt">${S.meter.toFixed(2).replace('.',',')}</span><span class="lbl">EUR<br>TARIF ${isNight()?'NUIT':'JOUR'}${c.cpam ? '<br>CPAM' : ''}</span></div>
-      <h2>Direction ${esc(N[c.to].n)}</h2>
-      ${rdvHTML(c)}
-      ${legHTML()}
-      <p class="howto">Va jusqu'au point rouge. Les routes rouges sont bouchées, les routes en pointillés noirs sont fermées.</p>
+      <h2>Direction ${esc(c.far ? P.a11.n : placeName(c.to))}</h2>
+      ${c.far ? `<p class="small">Rejoins l'A11 : la suite du trajet jusqu'à ${esc(c.far.n)} (${c.far.km} km) se fera automatiquement.</p>` : ''}
+      ${timeHTML(c)}${legHTML()}
+      <p class="howto">Va jusqu'au point rouge. Routes rouges : bouchons. Pointillés noirs : routes fermées.</p>
       <div class="btns">${hintBtn()}</div>`;
   }
   else if (S.phase === 'done'){
-    const r = S.result;
+    const r = S.result, last = S.courses >= S.M.max || S.clock >= S.M.end;
     h = `<div class="kicker">${r.ok ? 'Course terminée' : 'Course perdue'}</div>
-      <h2>${esc(r.client.name)}</h2>
-      ${starsHTML(r.stars)}
+      <h2>${esc(r.client.name)}</h2>${starsHTML(r.stars)}
       ${r.ok ? `<div class="meter"><span class="amt">${r.price.toFixed(2).replace('.',',')}</span><span class="lbl">EUR${r.cpam ? '<br>À FACTURER<br>À LA CPAM' : '<br>ENCAISSÉ'}</span></div>` : ''}
       <ul class="notes">${r.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>
-      ${r.ok ? `<p class="small">+${r.pts} points · ${Math.round(r.min)} min pour ${r.km.toFixed(1).replace('.',',')} km</p>` : ''}
-      <button class="btn primary" data-act="next">${S.courses >= S.M.max || S.clock >= S.M.end ? 'Voir le bilan de la journée' : 'Course suivante'}</button>
-      <p class="small">Avant la prochaine course, tu peux rouler librement jusqu'à une station ou une borne.</p>
+      ${r.ok ? `<p class="small">+${r.pts} points · ${Math.round(r.min)} min pour ${dec(r.km)} km</p>` : ''}
+      <button class="btn primary" data-act="next">${last ? 'Voir le bilan' : 'Course suivante'}</button>
+      <p class="small">Astuce : reviens vers Beaucouzé pour avoir des clients à la station. Ailleurs, tu n'auras que des réservations.</p>
       ${stationActions()}`;
   }
   else if (S.phase === 'end'){
     const avg = S.stars.length ? S.stars.reduce((a,b)=>a+b,0)/S.stars.length : 0;
-    const profit = S.cash + S.cpam - S.energyCost - S.depannage;
+    const profit = S.cash + S.cpam - S.energyCost - S.depannage - S.fines;
     h = `<div class="kicker">Fin de service · ${fmtClock(S.clock)}</div>
-      <h2>Bilan de ta ${S.mode==='nuit' ? 'nuit' : 'journée'}</h2>
-      ${starsHTML(Math.round(avg))}
+      <h2>Bilan de ta ${S.mode==='nuit' ? 'nuit' : 'journée'}</h2>${starsHTML(Math.round(avg))}
       <table class="bilan"><tbody>
         <tr><td>Courses</td><td>${S.courses}</td></tr>
-        <tr><td>Note moyenne</td><td>${avg.toFixed(1).replace('.',',')} / 5</td></tr>
-        <tr><td>Kilomètres parcourus</td><td>${S.km.toFixed(1).replace('.',',')} km</td></tr>
+        <tr><td>Note moyenne</td><td>${dec(avg)} / 5</td></tr>
+        <tr><td>Kilomètres parcourus</td><td>${dec(S.km)} km</td></tr>
         <tr><td>Encaissé auprès des clients</td><td>${eur(S.cash)}</td></tr>
         <tr><td>À facturer à la CPAM</td><td>${eur(S.cpam)}</td></tr>
         <tr><td>${S.V.kind==='elec' ? 'Recharges' : 'Carburant'}</td><td>−${eur(S.energyCost)}</td></tr>
         ${S.depannage ? `<tr><td>Dépannage</td><td>−${eur(S.depannage)}</td></tr>` : ''}
+        ${S.fines ? `<tr><td>Amendes</td><td>−${eur(S.fines)}</td></tr>` : ''}
         <tr class="total"><td><b>Bénéfice de la journée</b></td><td>${eur(profit)}</td></tr>
       </tbody></table>
       <p class="small">Avant loyer de la licence, assurance et charges. Tarifs indicatifs pour l'entraînement : les vrais tarifs sont fixés chaque année par arrêté préfectoral.</p>
@@ -926,24 +1056,29 @@ function render(){ renderHud(); renderPanel(); renderMap(); }
 panel.addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b || S.anim) return;
   const act = b.dataset.act;
-  if (act === 'go'){
-    const mode = panel.querySelector('input[name="mode"]:checked').value;
-    const veh = panel.querySelector('input[name="veh"]:checked').value;
-    newGame(mode, veh, $('#optVoice').checked);
-  }
+  if (act === 'go') newGame(panel.querySelector('input[name="mode"]:checked').value, panel.querySelector('input[name="veh"]:checked').value, $('#optVoice').checked);
+  else if (act === 'reload') loadNetwork(true);
   else if (act === 'hint'){ S.showHint = !S.showHint; if (S.showHint && S.leg) S.leg.hint = true; render(); }
   else if (act === 'say'){ const v = S.voice; S.voice = true; say(S.client.line, S.client.en); S.voice = v; }
   else if (act === 'ans') answer(+b.dataset.i);
+  else if (act === 'pas') answerPassant(+b.dataset.i);
+  else if (act === 'pasok'){ S.phase = S.prevPhase; render(); }
   else if (act === 'ride') startRide();
   else if (act === 'next') nextCourse();
+  else if (act === 'findst'){
+    if (S.stHint){ S.stHint = null; render(); return; }
+    const b2 = nearestStation(S.V.kind === 'elec' ? 'charge' : 'fuel');
+    if (!b2){ toast("Aucune station trouvée à proximité.", 'bad'); return; }
+    S.stHint = b2.st; toast(`${b2.st.name} : ${Math.round(b2.r.min)} min, ${dec(b2.r.km)} km.`, 'ok'); map.panTo([b2.st.lat, b2.st.lon]); render();
+  }
   else if (act === 'fuel') doFuel();
   else if (act === 'charge') doCharge();
   else if (act === 'pause') doPause();
-  else if (act === 'restart'){ S.phase = 'start'; S.client = null; S.leg = null; S.incidents = {}; S.pos = 'beaucouze'; render(); }
+  else if (act === 'restart'){ S.phase = 'start'; S.client = null; S.leg = null; S.incidents = {}; S.v = P.beaucouze.v; render(); }
 });
 
 render();
-requestAnimationFrame(() => centerOn('beaucouze', true));
+loadNetwork(false);
 })();
 </script>
 </body>
